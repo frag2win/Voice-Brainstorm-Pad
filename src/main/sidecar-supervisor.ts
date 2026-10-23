@@ -17,6 +17,7 @@ import * as crypto from "crypto";
 import { EventEmitter } from "events";
 import * as fs from "fs";
 import * as path from "path";
+import WebSocket from "ws";
 
 export type SidecarState =
   | "disconnected"
@@ -56,7 +57,7 @@ export class SidecarSupervisor extends EventEmitter {
   private pythonPath: string;
   private sidecarScript: string;
   private child: ChildProcess | null = null;
-  private ws: any = null; // Standard WebSocket
+  private ws: WebSocket | null = null;
   private port: number = 0;
   private state: SidecarState = "disconnected";
   private isStopping: boolean = false;
@@ -266,7 +267,7 @@ export class SidecarSupervisor extends EventEmitter {
       const socket = new WebSocket(wsUrl);
       this.ws = socket;
 
-      socket.onopen = () => {
+      socket.on("open", () => {
         // Send initial authentication handshake (hello)
         const helloMsg = {
           type: "hello",
@@ -276,29 +277,30 @@ export class SidecarSupervisor extends EventEmitter {
         };
         socket.send(JSON.stringify(helloMsg));
         this.startPing();
-      };
+      });
 
-      socket.onmessage = (event: MessageEvent) => {
+      socket.on("message", (raw: any) => {
         try {
-          const data = JSON.parse(event.data);
+          const text = typeof raw === "string" ? raw : raw.toString("utf8");
+          const data = JSON.parse(text);
           this.handleMessage(data);
         } catch {
           // ignore malformed
         }
-      };
+      });
 
-      socket.onclose = () => {
+      socket.on("close", () => {
         this.stopPing();
         this.ws = null;
         if (!this.isStopping && this.state !== "reconnecting") {
           this.setState("reconnecting");
           this.scheduleRestart();
         }
-      };
+      });
 
-      socket.onerror = () => {
-        // Handled by close event
-      };
+      socket.on("error", (err: any) => {
+        this.emit("error", err);
+      });
     } catch (err) {
       this.scheduleRestart();
     }

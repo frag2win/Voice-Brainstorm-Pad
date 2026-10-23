@@ -136,10 +136,13 @@ app.whenReady().then(() => {
   // Initialize supervisor
   supervisor = new SidecarSupervisor({ autoStart: true });
   supervisor.on("stateChange", (state) => {
+    console.log(`[Supervisor] stateChange: ${state}`);
     if (win && !win.isDestroyed()) {
       win.webContents.send("sidecar:state", state);
     }
   });
+  supervisor.on("log", (msg) => console.log(`[Sidecar] ${msg}`));
+  supervisor.on("error", (err) => console.error(`[Supervisor Error]`, err));
 
   createWindow();
 

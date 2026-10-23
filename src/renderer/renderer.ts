@@ -457,8 +457,23 @@ async function init(): Promise<void> {
 
   // Initialize sidecar status tracking
   try {
-    const status = await window.vbp.sidecar.getStatus();
-    updateSidecarStatus(status.state, status.model);
+    const checkStatus = async () => {
+      const status = await window.vbp.sidecar.getStatus();
+      updateSidecarStatus(status.state, status.model);
+      return status.state;
+    };
+
+    const initialState = await checkStatus();
+    if (initialState === "connecting" || initialState === "disconnected") {
+      const pollTimer = setInterval(async () => {
+        const st = await checkStatus();
+        if (st !== "connecting" && st !== "disconnected") {
+          clearInterval(pollTimer);
+        }
+      }, 500);
+      setTimeout(() => clearInterval(pollTimer), 10000);
+    }
+
     window.vbp.sidecar.onStateChange((state) => {
       updateSidecarStatus(state);
     });
