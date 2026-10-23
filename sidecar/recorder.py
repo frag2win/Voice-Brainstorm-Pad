@@ -8,6 +8,7 @@ Responsibilities:
   - Live RMS level meter computation at ~10 Hz
 """
 
+import logging
 import math
 import os
 import queue
@@ -16,6 +17,8 @@ import threading
 import time
 from typing import Callable, Optional
 import numpy as np
+
+logger = logging.getLogger("recorder")
 
 try:
     import sounddevice as sd  # type: ignore
@@ -197,15 +200,33 @@ class AudioRecorder:
                 except ValueError:
                     pass
 
-            self.stream = sd.InputStream(
-                samplerate=self.sample_rate,
-                channels=1,
-                dtype="float32",
-                blocksize=self.frame_size,
-                device=dev_idx,
-                callback=self._audio_callback,
-            )
-            self.stream.start()
+            try:
+                self.stream = sd.InputStream(
+                    samplerate=self.sample_rate,
+                    channels=1,
+                    dtype="float32",
+                    blocksize=self.frame_size,
+                    device=dev_idx,
+                    callback=self._audio_callback,
+                )
+                self.stream.start()
+            except Exception as e:
+                if dev_idx is not None:
+                    logger.warning(
+                        f"Failed to open audio device {dev_idx} ({e}), falling back to system default"
+                    )
+                    self.stream = sd.InputStream(
+                        samplerate=self.sample_rate,
+                        channels=1,
+                        dtype="float32",
+                        blocksize=self.frame_size,
+                        device=None,
+                        callback=self._audio_callback,
+                    )
+                    self.stream.start()
+                else:
+                    self.stop()
+                    raise
 
         return wav_path
 

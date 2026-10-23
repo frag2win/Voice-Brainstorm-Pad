@@ -56,15 +56,27 @@ PROTOCOL_VERSION = 1
 
 
 def list_audio_devices() -> List[Dict[str, Any]]:
-    """Query available microphone devices using sounddevice if available."""
+    """Query available microphone devices using sounddevice, validating each against 16kHz mono."""
     devices = []
     try:
         import sounddevice as sd  # type: ignore
+        hostapis = sd.query_hostapis()
         for i, dev in enumerate(sd.query_devices()):
             if dev.get("max_input_channels", 0) > 0:
+                hostapi_name = hostapis[dev["hostapi"]]["name"] if dev.get("hostapi") is not None else ""
+                # Skip WDM-KS as PortAudio throws -9996 on Windows WDM-KS shared streams
+                if "WDM-KS" in hostapi_name:
+                    continue
+                # Verify that the device can actually be opened for 16kHz mono float32 input
+                try:
+                    sd.check_input_settings(device=i, samplerate=16000, channels=1)
+                except Exception:
+                    continue
+
+                dev_name = dev.get("name", f"Microphone {i}")
                 devices.append({
                     "id": str(i),
-                    "name": dev.get("name", f"Microphone {i}"),
+                    "name": f"{dev_name} ({hostapi_name})",
                     "channels": dev.get("max_input_channels", 1),
                     "default_samplerate": dev.get("default_samplerate", 16000),
                 })
@@ -231,14 +243,29 @@ class SidecarServer:
                         on_level=handle_level,
                         on_frame=handle_frame,
                     )
-                    self.recorder.start(session_dir=session_folder, device=device_id)
-                    self.state = "listening"
-                    await websocket.send(json.dumps({
-                        "type": "state",
-                        "version": PROTOCOL_VERSION,
-                        "state": "listening",
-                    }))
-                    logger.info(f"Dictation started for session: {session_folder}")
+                    try:
+                        self.recorder.start(session_dir=session_folder, device=device_id)
+                        self.state = "listening"
+                        await websocket.send(json.dumps({
+                            "type": "state",
+                            "version": PROTOCOL_VERSION,
+                            "state": "listening",
+                        }))
+                        logger.info(f"Dictation started for session: {session_folder}")
+                    except Exception as e:
+                        logger.error(f"Failed to start recording: {e}")
+                        self.recorder = None
+                        self.state = "idle"
+                        await websocket.send(json.dumps({
+                            "type": "error",
+                            "version": PROTOCOL_VERSION,
+                            "message": f"Microphone error: {e}",
+                        }))
+                        await websocket.send(json.dumps({
+                            "type": "state",
+                            "version": PROTOCOL_VERSION,
+                            "state": "idle",
+                        }))
 
                 elif msg_type == "stop":
                     if self.recorder:
