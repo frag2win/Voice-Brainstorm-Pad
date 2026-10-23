@@ -18,6 +18,7 @@ export interface SessionMeta {
 export interface SessionPayload {
   meta: SessionMeta;
   text: string;
+  folderPath: string;
 }
 
 export interface SidecarStatus {
@@ -40,7 +41,12 @@ export interface VbpAPI {
   sidecar: {
     getStatus(): Promise<SidecarStatus>;
     restart(): Promise<void>;
+    startListening(sessionFolder: string, deviceId?: string): Promise<void>;
+    stopListening(): Promise<void>;
+    setDevice(deviceId: string): Promise<void>;
     onStateChange(callback: (state: string) => void): () => void;
+    onLevel(callback: (rms: number) => void): () => void;
+    onChunk(callback: (chunk: any) => void): () => void;
   };
 }
 
@@ -59,11 +65,30 @@ const api: VbpAPI = {
   sidecar: {
     getStatus: () => ipcRenderer.invoke("sidecar:status"),
     restart: () => ipcRenderer.invoke("sidecar:restart"),
+    startListening: (sessionFolder: string, deviceId?: string) =>
+      ipcRenderer.invoke("sidecar:start", { sessionFolder, deviceId }),
+    stopListening: () => ipcRenderer.invoke("sidecar:stop"),
+    setDevice: (deviceId: string) =>
+      ipcRenderer.invoke("sidecar:setDevice", { deviceId }),
     onStateChange: (callback: (state: string) => void) => {
       const handler = (_event: any, state: string) => callback(state);
       ipcRenderer.on("sidecar:state", handler);
       return () => {
         ipcRenderer.removeListener("sidecar:state", handler);
+      };
+    },
+    onLevel: (callback: (rms: number) => void) => {
+      const handler = (_event: any, rms: number) => callback(rms);
+      ipcRenderer.on("sidecar:level", handler);
+      return () => {
+        ipcRenderer.removeListener("sidecar:level", handler);
+      };
+    },
+    onChunk: (callback: (chunk: any) => void) => {
+      const handler = (_event: any, chunk: any) => callback(chunk);
+      ipcRenderer.on("sidecar:chunk", handler);
+      return () => {
+        ipcRenderer.removeListener("sidecar:chunk", handler);
       };
     },
   },

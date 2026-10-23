@@ -76,19 +76,19 @@ ipcMain.handle("sessions:list", () => {
   return sm?.listSessions() ?? [];
 });
 
-/** sessions:create  { title } → SessionMeta */
+/** sessions:create  { title } → SessionPayload */
 ipcMain.handle("sessions:create", (_ev, { title }: { title: string }) => {
   const session = sm!.createSession(title?.trim() || "Untitled");
   currentSessionSlug = session.meta.slug;
-  return { meta: session.meta, text: session.text };
+  return { meta: session.meta, text: session.text, folderPath: session.folderPath };
 });
 
-/** sessions:open  { slug } → { meta, text } | null */
+/** sessions:open  { slug } → SessionPayload | null */
 ipcMain.handle("sessions:open", (_ev, { slug }: { slug: string }) => {
   const session = sm?.openSession(slug);
   if (!session) return null;
   currentSessionSlug = slug;
-  return { meta: session.meta, text: session.text };
+  return { meta: session.meta, text: session.text, folderPath: session.folderPath };
 });
 
 /** sessions:save  { slug, text } → void */
@@ -130,6 +130,21 @@ ipcMain.handle("sidecar:restart", async () => {
   }
 });
 
+/** sidecar:start → void */
+ipcMain.handle("sidecar:start", (_ev, { sessionFolder, deviceId }: { sessionFolder: string; deviceId?: string }) => {
+  supervisor?.startListening(sessionFolder, deviceId);
+});
+
+/** sidecar:stop → void */
+ipcMain.handle("sidecar:stop", () => {
+  supervisor?.stopListening();
+});
+
+/** sidecar:setDevice → void */
+ipcMain.handle("sidecar:setDevice", (_ev, { deviceId }: { deviceId: string }) => {
+  supervisor?.setDevice(deviceId);
+});
+
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
@@ -139,6 +154,17 @@ app.whenReady().then(() => {
     console.log(`[Supervisor] stateChange: ${state}`);
     if (win && !win.isDestroyed()) {
       win.webContents.send("sidecar:state", state);
+    }
+  });
+  supervisor.on("level", (rms) => {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send("sidecar:level", rms);
+    }
+  });
+  supervisor.on("chunk", (chunk) => {
+    console.log(`[Chunker] Emitted chunk #${chunk.seq} (${chunk.duration_s}s) -> ${chunk.audio_file}`);
+    if (win && !win.isDestroyed()) {
+      win.webContents.send("sidecar:chunk", chunk);
     }
   });
   supervisor.on("log", (msg) => console.log(`[Sidecar] ${msg}`));

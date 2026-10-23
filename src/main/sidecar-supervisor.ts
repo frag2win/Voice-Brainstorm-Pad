@@ -323,6 +323,14 @@ export class SidecarSupervisor extends EventEmitter {
         }
         break;
 
+      case "level":
+        this.emit("level", typeof data.rms === "number" ? data.rms : 0);
+        break;
+
+      case "chunk_ready":
+        this.emit("chunk", data);
+        break;
+
       case "pong":
         if (this.pingTimeoutTimer) {
           clearTimeout(this.pingTimeoutTimer);
@@ -333,6 +341,39 @@ export class SidecarSupervisor extends EventEmitter {
       default:
         this.emit("message", data);
         break;
+    }
+  }
+
+  // ── Dictation Commands (Iteration 3) ────────────────────────────────────────
+
+  public startListening(sessionFolder: string, deviceId?: string): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(
+        JSON.stringify({
+          type: "start",
+          version: 1,
+          session_folder: sessionFolder,
+          device_id: deviceId || null,
+        })
+      );
+    }
+  }
+
+  public stopListening(): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: "stop", version: 1 }));
+    }
+  }
+
+  public setDevice(deviceId: string): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(
+        JSON.stringify({
+          type: "set_device",
+          version: 1,
+          device_id: deviceId,
+        })
+      );
     }
   }
 

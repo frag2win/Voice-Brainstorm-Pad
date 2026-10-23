@@ -22,6 +22,18 @@ import signal
 import sys
 from typing import Any, Dict, List, Optional
 
+# Ensure project root is on sys.path so `sidecar.*` imports work regardless of CWD or execution method
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+try:
+    from sidecar.chunker import AudioChunker
+    from sidecar.recorder import AudioRecorder
+except ModuleNotFoundError:
+    from chunker import AudioChunker  # type: ignore
+    from recorder import AudioRecorder  # type: ignore
+
 try:
     from websockets.asyncio.server import serve, Server
     from websockets.exceptions import ConnectionClosed
@@ -68,6 +80,11 @@ class SidecarServer:
         self.port: int = 0
         self.state: str = "idle"
         self._stop_event = asyncio.Event()
+
+        # Recorder & Chunker components (Iteration 3)
+        self.recorder: Optional[AudioRecorder] = None
+        self.chunker: Optional[AudioChunker] = None
+        self.active_device: Optional[str] = None
 
     async def start(self) -> None:
         """Start the WebSocket server on 127.0.0.1 and record the assigned port."""
@@ -168,6 +185,90 @@ class SidecarServer:
                     }
                     await websocket.send(json.dumps(pong_msg))
 
+                elif msg_type == "start":
+                    session_folder = data.get("session_folder", "")
+                    device_id = data.get("device_id") or self.active_device
+                    if not session_folder:
+                        logger.warning("Start requested without session_folder")
+                        continue
+
+                    loop = asyncio.get_running_loop()
+
+                    def handle_level(rms: float):
+                        try:
+                            msg = json.dumps({"type": "level", "version": PROTOCOL_VERSION, "rms": rms})
+                            asyncio.run_coroutine_threadsafe(websocket.send(msg), loop)
+                        except Exception:
+                            pass
+
+                    self.chunker = AudioChunker(session_dir=session_folder)
+
+                    def handle_frame(frame: np.ndarray):
+                        if not self.chunker:
+                            return
+                        chunk = self.chunker.process_frame(frame)
+                        if chunk:
+                            try:
+                                chunk_msg = json.dumps({
+                                    "type": "chunk_ready",
+                                    "version": PROTOCOL_VERSION,
+                                    "seq": chunk.seq,
+                                    "t_start": chunk.t_start,
+                                    "t_end": chunk.t_end,
+                                    "duration_s": chunk.duration_s,
+                                    "audio_file": chunk.file_path,
+                                })
+                                asyncio.run_coroutine_threadsafe(websocket.send(chunk_msg), loop)
+                            except Exception:
+                                pass
+
+                    if self.recorder:
+                        self.recorder.stop()
+
+                    self.recorder = AudioRecorder(
+                        on_level=handle_level,
+                        on_frame=handle_frame,
+                    )
+                    self.recorder.start(session_dir=session_folder, device=device_id)
+                    self.state = "listening"
+                    await websocket.send(json.dumps({
+                        "type": "state",
+                        "version": PROTOCOL_VERSION,
+                        "state": "listening",
+                    }))
+                    logger.info(f"Dictation started for session: {session_folder}")
+
+                elif msg_type == "stop":
+                    if self.recorder:
+                        self.recorder.stop()
+                        self.recorder = None
+
+                    if self.chunker:
+                        final_chunk = self.chunker.flush()
+                        if final_chunk:
+                            await websocket.send(json.dumps({
+                                "type": "chunk_ready",
+                                "version": PROTOCOL_VERSION,
+                                "seq": final_chunk.seq,
+                                "t_start": final_chunk.t_start,
+                                "t_end": final_chunk.t_end,
+                                "duration_s": final_chunk.duration_s,
+                                "audio_file": final_chunk.file_path,
+                            }))
+                        self.chunker = None
+
+                    self.state = "idle"
+                    await websocket.send(json.dumps({
+                        "type": "state",
+                        "version": PROTOCOL_VERSION,
+                        "state": "idle",
+                    }))
+                    logger.info("Dictation stopped cleanly")
+
+                elif msg_type == "set_device":
+                    self.active_device = data.get("device_id")
+                    logger.info(f"Active input device set to: {self.active_device}")
+
                 elif msg_type == "list_devices":
                     devices = list_audio_devices()
                     await websocket.send(json.dumps({
@@ -192,6 +293,14 @@ class SidecarServer:
             logger.info(f"Client {peer} disconnected")
         except Exception as e:
             logger.error(f"Error handling connection: {e}", exc_info=True)
+        finally:
+            if self.recorder:
+                self.recorder.stop()
+                self.recorder = None
+            if self.chunker:
+                self.chunker.flush()
+                self.chunker = None
+            self.state = "idle"
 
 
 async def run_server() -> None:
