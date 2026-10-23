@@ -224,6 +224,61 @@ body {
 #autosave-indicator.saved { color: var(--success); }
 #autosave-indicator.saving { color: var(--text-dim); }
 
+#header-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  transition: all var(--transition);
+  user-select: none;
+}
+
+.pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+  transition: background var(--transition), box-shadow var(--transition);
+}
+
+.pill-ready .pill-dot,
+.pill-idle .pill-dot {
+  background: var(--success);
+  box-shadow: 0 0 8px rgba(92, 224, 168, 0.6);
+}
+
+.pill-connecting .pill-dot,
+.pill-reconnecting .pill-dot {
+  background: #f5b041;
+  box-shadow: 0 0 6px rgba(245, 176, 65, 0.5);
+  animation: pulse-dot 1.2s infinite ease-in-out;
+}
+
+.pill-disconnected .pill-dot,
+.pill-error .pill-dot {
+  background: var(--danger);
+  box-shadow: 0 0 6px rgba(224, 92, 115, 0.5);
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.3; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
 #word-count {
   font-size: 12px;
   color: var(--text-muted);

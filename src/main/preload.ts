@@ -20,6 +20,13 @@ export interface SessionPayload {
   text: string;
 }
 
+export interface SidecarStatus {
+  state: string;
+  model: string;
+  devices: Array<{ id: string; name: string }>;
+  port: number;
+}
+
 export interface VbpAPI {
   sessions: {
     list(): Promise<SessionMeta[]>;
@@ -29,6 +36,11 @@ export interface VbpAPI {
     rename(slug: string, title: string): Promise<void>;
     delete(slug: string): Promise<void>;
     rootPath(): Promise<string>;
+  };
+  sidecar: {
+    getStatus(): Promise<SidecarStatus>;
+    restart(): Promise<void>;
+    onStateChange(callback: (state: string) => void): () => void;
   };
 }
 
@@ -43,6 +55,17 @@ const api: VbpAPI = {
       ipcRenderer.invoke("sessions:rename", { slug, title }),
     delete: (slug: string) => ipcRenderer.invoke("sessions:delete", { slug }),
     rootPath: () => ipcRenderer.invoke("sessions:rootPath"),
+  },
+  sidecar: {
+    getStatus: () => ipcRenderer.invoke("sidecar:status"),
+    restart: () => ipcRenderer.invoke("sidecar:restart"),
+    onStateChange: (callback: (state: string) => void) => {
+      const handler = (_event: any, state: string) => callback(state);
+      ipcRenderer.on("sidecar:state", handler);
+      return () => {
+        ipcRenderer.removeListener("sidecar:state", handler);
+      };
+    },
   },
 };
 

@@ -17,7 +17,12 @@ import { search, searchKeymap, openSearchPanel } from "@codemirror/search";
 import { markdown } from "@codemirror/lang-markdown";
 import { indentOnInput, syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 
-// ─── Globals ──────────────────────────────────────────────────────────────────
+interface SidecarStatus {
+  state: string;
+  model: string;
+  devices: Array<{ id: string; name: string }>;
+  port: number;
+}
 
 declare global {
   interface Window {
@@ -30,6 +35,11 @@ declare global {
         rename(slug: string, title: string): Promise<void>;
         delete(slug: string): Promise<void>;
         rootPath(): Promise<string>;
+      };
+      sidecar: {
+        getStatus(): Promise<SidecarStatus>;
+        restart(): Promise<void>;
+        onStateChange(callback: (state: string) => void): () => void;
       };
     };
   }
@@ -74,6 +84,8 @@ const elFormNew       = document.getElementById("form-new-session") as HTMLFormE
 const elInputTitle    = document.getElementById("input-new-title") as HTMLInputElement;
 const elBtnCancel     = document.getElementById("btn-dialog-cancel")!;
 const elRootLabel     = document.getElementById("sessions-root-label")!;
+const elSidecarPill   = document.getElementById("sidecar-status-pill")!;
+const elSidecarText   = document.getElementById("sidecar-status-text")!;
 
 // ─── CodeMirror setup ─────────────────────────────────────────────────────────
 
@@ -398,6 +410,43 @@ function formatRelative(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function updateSidecarStatus(state: string, model?: string): void {
+  if (!elSidecarPill || !elSidecarText) return;
+  elSidecarPill.className = `pill pill-${state}`;
+  let label = "Connecting…";
+  let tooltip = "Speech engine connection status";
+
+  switch (state) {
+    case "ready":
+    case "idle":
+      label = "Sidecar ready";
+      tooltip = `Speech sidecar connected and idle (${model || "small.en"})`;
+      break;
+    case "connecting":
+      label = "Connecting…";
+      tooltip = "Starting speech sidecar…";
+      break;
+    case "reconnecting":
+      label = "Reconnecting…";
+      tooltip = "Speech sidecar restarted, reconnecting…";
+      break;
+    case "disconnected":
+      label = "Sidecar offline";
+      tooltip = "Speech sidecar is offline (typing & editor remain fully functional)";
+      break;
+    case "error":
+      label = "Sidecar error";
+      tooltip = "Speech sidecar error";
+      break;
+    default:
+      label = state;
+      tooltip = `Sidecar state: ${state}`;
+  }
+
+  elSidecarText.textContent = label;
+  elSidecarPill.title = tooltip;
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 async function init(): Promise<void> {
@@ -405,6 +454,17 @@ async function init(): Promise<void> {
   const rootPath = await window.vbp.sessions.rootPath();
   elRootLabel.textContent = rootPath;
   elRootLabel.title = rootPath;
+
+  // Initialize sidecar status tracking
+  try {
+    const status = await window.vbp.sidecar.getStatus();
+    updateSidecarStatus(status.state, status.model);
+    window.vbp.sidecar.onStateChange((state) => {
+      updateSidecarStatus(state);
+    });
+  } catch (err) {
+    console.warn("Could not query sidecar status:", err);
+  }
 
   // Load session list
   sessions = await window.vbp.sessions.list();
@@ -417,3 +477,4 @@ async function init(): Promise<void> {
 }
 
 init().catch(console.error);
+

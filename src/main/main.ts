@@ -12,6 +12,7 @@ import { app, BrowserWindow, ipcMain, shell } from "electron";
 import * as path from "path";
 import * as url from "url";
 import { SessionManager, SessionMeta } from "./sessions";
+import { SidecarSupervisor } from "./sidecar-supervisor";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -23,6 +24,7 @@ const INDEX_HTML = path.join(__dirname, "../../src/renderer/index.html");
 
 let win: BrowserWindow | null = null;
 let sm: SessionManager | null = null;
+let supervisor: SidecarSupervisor | null = null;
 let currentSessionSlug: string | null = null;
 
 // ─── Window ───────────────────────────────────────────────────────────────────
@@ -108,9 +110,37 @@ ipcMain.handle("sessions:delete", (_ev, { slug }: { slug: string }) => {
 /** sessions:rootPath → string */
 ipcMain.handle("sessions:rootPath", () => sm?.getRoot() ?? "");
 
+// ─── Sidecar IPC handlers ─────────────────────────────────────────────────────
+
+/** sidecar:status → { state, model, devices, port } */
+ipcMain.handle("sidecar:status", () => {
+  return {
+    state: supervisor?.getState() ?? "disconnected",
+    model: supervisor?.getModel() ?? "small.en",
+    devices: supervisor?.getDevices() ?? [],
+    port: supervisor?.getPort() ?? 0,
+  };
+});
+
+/** sidecar:restart → void */
+ipcMain.handle("sidecar:restart", async () => {
+  if (supervisor) {
+    await supervisor.stop();
+    await supervisor.start();
+  }
+});
+
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
+  // Initialize supervisor
+  supervisor = new SidecarSupervisor({ autoStart: true });
+  supervisor.on("stateChange", (state) => {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send("sidecar:state", state);
+    }
+  });
+
   createWindow();
 
   app.on("activate", () => {
@@ -118,16 +148,22 @@ app.whenReady().then(() => {
   });
 });
 
-app.on("window-all-closed", () => {
+app.on("window-all-closed", async () => {
   // Mark clean shutdown for current session
   if (currentSessionSlug && sm) {
     sm.markCleanShutdown(currentSessionSlug);
   }
+  if (supervisor) {
+    await supervisor.stop();
+  }
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", async () => {
   if (currentSessionSlug && sm) {
     sm.markCleanShutdown(currentSessionSlug);
+  }
+  if (supervisor) {
+    await supervisor.stop();
   }
 });
