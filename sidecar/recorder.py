@@ -42,8 +42,15 @@ class LiveWavWriter:
         self.samples_since_last_patch = 0
 
         os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
-        self.file = open(file_path, "wb+")
-        self._write_initial_header()
+        if os.path.exists(file_path) and os.path.getsize(file_path) >= 44:
+            self.file = open(file_path, "r+b")
+            self.file.seek(0, os.SEEK_END)
+            existing_bytes = self.file.tell() - 44
+            self.total_samples = max(0, existing_bytes // (self.channels * self.bytes_per_sample))
+            self.patch_header()
+        else:
+            self.file = open(file_path, "wb+")
+            self._write_initial_header()
 
     def _write_initial_header(self) -> None:
         """Write standard 44-byte RIFF/WAVE header with 0 initial data length."""

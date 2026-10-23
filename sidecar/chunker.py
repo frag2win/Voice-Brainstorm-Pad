@@ -56,11 +56,24 @@ class AudioChunker:
     def __init__(self, session_dir: str, config: Optional[ChunkerConfig] = None):
         self.session_dir = session_dir
         self.config = config or ChunkerConfig()
-        self.sequence_num = 0
-
         self.chunks_dir = os.path.join(session_dir, "chunks")
         os.makedirs(self.chunks_dir, exist_ok=True)
         self.jsonl_path = os.path.join(session_dir, "chunks.jsonl")
+
+        # Resume sequence numbering & total sample count from existing chunks.jsonl
+        self.sequence_num = 0
+        self._total_samples_emitted = 0
+        if os.path.exists(self.jsonl_path):
+            try:
+                with open(self.jsonl_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            data = json.loads(line)
+                            self.sequence_num = max(self.sequence_num, data.get("seq", 0))
+                            self._total_samples_emitted += data.get("samples", 0)
+            except Exception:
+                pass
 
         # Load Silero VAD model if available
         self._vad = None
