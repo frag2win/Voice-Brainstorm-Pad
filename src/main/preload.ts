@@ -1,0 +1,49 @@
+/**
+ * Preload script — Voice Brainstorm Pad Iteration 1
+ *
+ * Exposes a narrow, typed API to the renderer via contextBridge.
+ * The renderer has zero access to Node.js or Electron internals.
+ */
+
+import { contextBridge, ipcRenderer } from "electron";
+
+export interface SessionMeta {
+  slug: string;
+  title: string;
+  created: string;
+  updated: string;
+  clean_shutdown: boolean;
+}
+
+export interface SessionPayload {
+  meta: SessionMeta;
+  text: string;
+}
+
+export interface VbpAPI {
+  sessions: {
+    list(): Promise<SessionMeta[]>;
+    create(title: string): Promise<SessionPayload>;
+    open(slug: string): Promise<SessionPayload | null>;
+    save(slug: string, text: string): Promise<void>;
+    rename(slug: string, title: string): Promise<void>;
+    delete(slug: string): Promise<void>;
+    rootPath(): Promise<string>;
+  };
+}
+
+const api: VbpAPI = {
+  sessions: {
+    list: () => ipcRenderer.invoke("sessions:list"),
+    create: (title: string) => ipcRenderer.invoke("sessions:create", { title }),
+    open: (slug: string) => ipcRenderer.invoke("sessions:open", { slug }),
+    save: (slug: string, text: string) =>
+      ipcRenderer.invoke("sessions:save", { slug, text }),
+    rename: (slug: string, title: string) =>
+      ipcRenderer.invoke("sessions:rename", { slug, title }),
+    delete: (slug: string) => ipcRenderer.invoke("sessions:delete", { slug }),
+    rootPath: () => ipcRenderer.invoke("sessions:rootPath"),
+  },
+};
+
+contextBridge.exposeInMainWorld("vbp", api);

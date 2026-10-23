@@ -12,7 +12,17 @@ __pycache__/
 *.so
 .pytest_cache/
 
+# Node & Build artifacts
+node_modules/
+dist/
+*.log
+
+# App user data & sessions
+sessions/
+*.wav
+
 # OS artifacts
 Thumbs.db
 Desktop.ini
 .DS_Store
+

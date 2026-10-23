@@ -1,0 +1,32 @@
+{
+  "name": "voice-brainstorm-pad",
+  "version": "0.1.0",
+  "description": "Local voice brainstorming editor — Iteration 1 (Editor Shell)",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:renderer": "npx esbuild src/renderer/renderer.ts --bundle --outfile=dist/renderer/renderer.bundle.js --format=esm --target=chrome128 --sourcemap",
+    "build": "npm run build:main && npm run build:renderer",
+    "start": "npm run build && electron .",
+    "dev": "npm run build && electron . --dev",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "electron": "^33.4.4",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4",
+    "@types/node": "^22.15.30"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.8.1",
+    "@codemirror/lang-markdown": "^6.3.2",
+    "@codemirror/language": "^6.11.1",
+    "@codemirror/search": "^6.5.10",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/view": "^6.37.2",
+    "@lezer/highlight": "^1.2.1",
+    "codemirror": "^6.0.2"
+  }
+}

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'none';" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Voice Brainstorm Pad</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- ── Sidebar ───────────────────────────────────────────────────────── -->
+  <aside id="sidebar" aria-label="Session list">
+    <div id="sidebar-header">
+      <h1 id="app-name">🎙 Brainstorm Pad</h1>
+      <button id="btn-new-session" title="New session (Ctrl+N)" aria-label="New session">
+        <span aria-hidden="true">＋</span> New
+      </button>
+    </div>
+
+    <div id="session-list-wrapper">
+      <ul id="session-list" role="listbox" aria-label="Previous sessions">
+        <!-- populated by renderer.js -->
+      </ul>
+    </div>
+
+    <div id="sidebar-footer">
+      <span id="sessions-root-label" title="Sessions folder"></span>
+    </div>
+  </aside>
+
+  <!-- ── Main area ─────────────────────────────────────────────────────── -->
+  <main id="main-area">
+    <!-- Title bar -->
+    <header id="editor-header">
+      <div id="title-wrapper">
+        <input
+          id="session-title"
+          type="text"
+          placeholder="Untitled session"
+          spellcheck="false"
+          aria-label="Session title"
+          disabled
+        />
+        <span id="autosave-indicator" aria-live="polite"></span>
+      </div>
+      <div id="header-meta">
+        <span id="word-count" aria-label="Word count">0 words</span>
+      </div>
+    </header>
+
+    <!-- CodeMirror editor mount point -->
+    <div id="editor-mount" aria-label="Document editor" tabindex="-1"></div>
+
+    <!-- Empty state shown before any session is open -->
+    <div id="empty-state" aria-hidden="false">
+      <div id="empty-icon" aria-hidden="true">🧠</div>
+      <h2>Start brainstorming</h2>
+      <p>Create a new session or pick one from the left.</p>
+      <button id="btn-empty-new" aria-label="Create new session">New session</button>
+    </div>
+  </main>
+
+  <!-- ── Dialogs ───────────────────────────────────────────────────────── -->
+
+  <!-- New session dialog -->
+  <dialog id="dialog-new-session" aria-labelledby="dialog-new-title">
+    <form id="form-new-session" method="dialog">
+      <h2 id="dialog-new-title">New session</h2>
+      <label for="input-new-title">Title</label>
+      <input id="input-new-title" type="text" placeholder="Untitled" autocomplete="off" />
+      <div id="dialog-new-actions">
+        <button type="button" id="btn-dialog-cancel" value="cancel">Cancel</button>
+        <button type="submit" id="btn-dialog-create" value="create">Create</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="../../dist/renderer/renderer.bundle.js"></script>
+</body>
+</html>
