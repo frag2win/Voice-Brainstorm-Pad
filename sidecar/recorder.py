@@ -194,7 +194,7 @@ class AudioRecorder:
 
         if sd is not None:
             dev_idx = None
-            if device is not None:
+            if device is not None and str(device).strip() != "":
                 try:
                     dev_idx = int(device)
                 except ValueError:
@@ -228,7 +228,59 @@ class AudioRecorder:
                     self.stop()
                     raise
 
+            if self.stream is not None:
+                self.active_device_id = self.stream.device
+                try:
+                    dev_info = sd.query_devices(self.stream.device)
+                    self.active_device_name = dev_info.get("name", f"Device #{self.stream.device}")
+                except Exception:
+                    self.active_device_name = f"Device #{self.stream.device}"
+                logger.info(f"Audio capture active on #{self.active_device_id}: {self.active_device_name}")
+
         return wav_path
+
+    def switch_device(self, device: Optional[int | str] = None) -> bool:
+        """Switch audio input device dynamically while recording."""
+        if not self.is_recording or sd is None:
+            return False
+
+        dev_idx = None
+        if device is not None and str(device).strip() != "":
+            try:
+                dev_idx = int(device)
+            except ValueError:
+                pass
+
+        try:
+            old_stream = self.stream
+            new_stream = sd.InputStream(
+                samplerate=self.sample_rate,
+                channels=1,
+                dtype="float32",
+                blocksize=self.frame_size,
+                device=dev_idx,
+                callback=self._audio_callback,
+            )
+            new_stream.start()
+            self.stream = new_stream
+            if old_stream:
+                try:
+                    old_stream.stop()
+                    old_stream.close()
+                except Exception:
+                    pass
+
+            self.active_device_id = self.stream.device
+            try:
+                dev_info = sd.query_devices(self.stream.device)
+                self.active_device_name = dev_info.get("name", f"Device #{self.stream.device}")
+            except Exception:
+                self.active_device_name = f"Device #{self.stream.device}"
+            logger.info(f"Switched active audio capture to #{self.active_device_id}: {self.active_device_name}")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to switch to audio device {dev_idx}: {e}")
+            return False
 
     def stop(self) -> None:
         """Stop recording and finalize files."""

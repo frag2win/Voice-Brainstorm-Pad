@@ -535,9 +535,7 @@ async function init(): Promise<void> {
 
   // Wire Microphone Selector
   elMicSelect.addEventListener("change", async () => {
-    if (elMicSelect.value) {
-      await window.vbp.sidecar.setDevice(elMicSelect.value);
-    }
+    await window.vbp.sidecar.setDevice(elMicSelect.value);
   });
 
   // Wire Live Audio Level Meter

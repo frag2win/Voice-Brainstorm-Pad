@@ -201,7 +201,12 @@ class SidecarServer:
 
                 elif msg_type == "start":
                     session_folder = data.get("session_folder", "")
-                    device_id = data.get("device_id") or self.active_device
+                    dev_arg = data.get("device_id")
+                    if dev_arg is not None and str(dev_arg).strip() != "":
+                        device_id = str(dev_arg).strip()
+                    else:
+                        device_id = self.active_device
+
                     if not session_folder:
                         logger.warning("Start requested without session_folder")
                         continue
@@ -231,6 +236,7 @@ class SidecarServer:
                                     "t_end": chunk.t_end,
                                     "duration_s": chunk.duration_s,
                                     "audio_file": chunk.file_path,
+                                    "device_name": getattr(self.recorder, "active_device_name", "Default Microphone"),
                                 })
                                 asyncio.run_coroutine_threadsafe(websocket.send(chunk_msg), loop)
                             except Exception:
@@ -246,12 +252,20 @@ class SidecarServer:
                     try:
                         self.recorder.start(session_dir=session_folder, device=device_id)
                         self.state = "listening"
+                        dev_name = getattr(self.recorder, "active_device_name", "Default Microphone")
+                        dev_id = getattr(self.recorder, "active_device_id", None)
+                        logger.info(f"Dictation started for session: {session_folder} on device [{dev_id}]: {dev_name}")
                         await websocket.send(json.dumps({
                             "type": "state",
                             "version": PROTOCOL_VERSION,
                             "state": "listening",
                         }))
-                        logger.info(f"Dictation started for session: {session_folder}")
+                        await websocket.send(json.dumps({
+                            "type": "device_info",
+                            "version": PROTOCOL_VERSION,
+                            "device_id": str(dev_id) if dev_id is not None else "",
+                            "device_name": dev_name,
+                        }))
                     except Exception as e:
                         logger.error(f"Failed to start recording: {e}")
                         self.recorder = None
@@ -295,8 +309,23 @@ class SidecarServer:
                     logger.info("Dictation stopped cleanly")
 
                 elif msg_type == "set_device":
-                    self.active_device = data.get("device_id")
-                    logger.info(f"Active input device set to: {self.active_device}")
+                    raw_dev = data.get("device_id")
+                    if raw_dev is not None and str(raw_dev).strip() != "":
+                        self.active_device = str(raw_dev).strip()
+                    else:
+                        self.active_device = None
+
+                    logger.info(f"Active input device set to: {self.active_device or 'Default Microphone'}")
+                    if self.recorder and self.state == "listening":
+                        self.recorder.switch_device(self.active_device)
+                        dev_name = getattr(self.recorder, "active_device_name", "Default Microphone")
+                        dev_id = getattr(self.recorder, "active_device_id", None)
+                        await websocket.send(json.dumps({
+                            "type": "device_info",
+                            "version": PROTOCOL_VERSION,
+                            "device_id": str(dev_id) if dev_id is not None else "",
+                            "device_name": dev_name,
+                        }))
 
                 elif msg_type == "list_devices":
                     devices = list_audio_devices()
