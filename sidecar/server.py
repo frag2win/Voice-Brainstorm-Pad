@@ -32,9 +32,11 @@ if _project_root not in sys.path:
 try:
     from sidecar.chunker import AudioChunker
     from sidecar.recorder import AudioRecorder
+    from sidecar.transcriber import Transcriber, TranscriberConfig, TranscriptionResult
 except ModuleNotFoundError:
     from chunker import AudioChunker  # type: ignore
     from recorder import AudioRecorder  # type: ignore
+    from transcriber import Transcriber, TranscriberConfig, TranscriptionResult  # type: ignore
 
 try:
     from websockets.asyncio.server import serve, Server
@@ -95,10 +97,38 @@ class SidecarServer:
         self.state: str = "idle"
         self._stop_event = asyncio.Event()
 
-        # Recorder & Chunker components (Iteration 3)
+        # Recorder, Chunker & Transcriber components (Iteration 3 & 4)
         self.recorder: Optional[AudioRecorder] = None
         self.chunker: Optional[AudioChunker] = None
+        self.transcriber: Optional[Transcriber] = None
         self.active_device: Optional[str] = None
+        self.current_session_folder: Optional[str] = None
+        self._active_ws: Optional[Any] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def _on_transcript(self, result: TranscriptionResult) -> None:
+        """Called by Transcriber worker thread when transcription of a chunk completes."""
+        logger.info(
+            f"[Transcriber] chunk #{result.seq} ({result.audio_s:.1f}s, RTF {result.rtf:.2f}x, {result.word_count} words) -> \"{result.text}\""
+        )
+        if self._active_ws and self._loop and not getattr(self._active_ws, "closed", True):
+            try:
+                msg = json.dumps({
+                    "type": "transcript",
+                    "version": PROTOCOL_VERSION,
+                    "seq": result.seq,
+                    "text": result.text,
+                    "duration_s": result.audio_s,
+                    "transcribe_s": round(result.transcribe_s, 3),
+                    "rtf": round(result.rtf, 3),
+                    "words": result.word_count,
+                    "latency_ms": round(result.latency_ms, 1),
+                    "queue_depth": result.queue_depth,
+                    "audio_file": result.audio_file,
+                })
+                asyncio.run_coroutine_threadsafe(self._active_ws.send(msg), self._loop)
+            except Exception as e:
+                logger.error(f"Error sending transcript message: {e}")
 
     async def start(self) -> None:
         """Start the WebSocket server on 127.0.0.1 and record the assigned port."""
@@ -118,9 +148,34 @@ class SidecarServer:
 
         logger.info(f"Sidecar listening on ws://{self.host}:{self.port}")
 
+        # Initialize Whisper Transcriber worker asynchronously so port announcement is instant (Iteration 4)
+        loop = asyncio.get_running_loop()
+        def _load():
+            try:
+                self.transcriber = Transcriber(
+                    config=TranscriberConfig(model_name="small.en", cpu_threads=4),
+                    on_transcript=self._on_transcript,
+                    auto_warmup=True,
+                )
+            except Exception as e:
+                logger.warning(f"Could not load small.en model ({e}), falling back to base.en")
+                try:
+                    self.transcriber = Transcriber(
+                        config=TranscriberConfig(model_name="base.en", cpu_threads=4),
+                        on_transcript=self._on_transcript,
+                        auto_warmup=True,
+                    )
+                except Exception as e2:
+                    logger.error(f"Failed to load Whisper model: {e2}")
+
+        self._load_task = loop.run_in_executor(None, _load)
+
     async def stop(self) -> None:
-        """Stop the WebSocket server."""
+        """Stop the WebSocket server and background workers."""
         self._stop_event.set()
+        if self.transcriber:
+            self.transcriber.stop()
+            self.transcriber = None
         if self.server:
             self.server.close()
             await self.server.wait_closed()
@@ -162,12 +217,15 @@ class SidecarServer:
             return
 
         # ── Step 2: Send `ready` and initial `state` ──────────────────────────
+        self._active_ws = websocket
+        self._loop = asyncio.get_running_loop()
+
         devices = list_audio_devices()
         ready_payload = {
             "type": "ready",
             "version": PROTOCOL_VERSION,
             "engine": "faster-whisper",
-            "model": "small.en",
+            "model": self.transcriber.config.model_name if self.transcriber else "small.en",
             "devices": devices,
         }
         await websocket.send(json.dumps(ready_payload))
@@ -200,6 +258,11 @@ class SidecarServer:
                     await websocket.send(json.dumps(pong_msg))
 
                 elif msg_type == "start":
+                    if self._load_task and not self._load_task.done():
+                        logger.info("Waiting for background transcriber warmup to finish before starting dictation...")
+                        await self._load_task
+                        self._load_task = None
+
                     session_folder = data.get("session_folder", "")
                     dev_arg = data.get("device_id")
                     if dev_arg is not None and str(dev_arg).strip() != "":
@@ -220,6 +283,7 @@ class SidecarServer:
                         except Exception:
                             pass
 
+                    self.current_session_folder = session_folder
                     self.chunker = AudioChunker(session_dir=session_folder)
 
                     def handle_frame(frame: np.ndarray):
@@ -241,6 +305,15 @@ class SidecarServer:
                                 asyncio.run_coroutine_threadsafe(websocket.send(chunk_msg), loop)
                             except Exception:
                                 pass
+
+                            # Enqueue into Transcriber worker (Iteration 4)
+                            if self.transcriber:
+                                self.transcriber.enqueue(
+                                    seq=chunk.seq,
+                                    audio_path=chunk.file_path,
+                                    duration_s=chunk.duration_s,
+                                    session_dir=session_folder,
+                                )
 
                     if self.recorder:
                         self.recorder.stop()
@@ -298,7 +371,18 @@ class SidecarServer:
                                 "duration_s": final_chunk.duration_s,
                                 "audio_file": final_chunk.file_path,
                             }))
+                            if self.transcriber:
+                                self.transcriber.enqueue(
+                                    seq=final_chunk.seq,
+                                    audio_path=final_chunk.file_path,
+                                    duration_s=final_chunk.duration_s,
+                                    session_dir=self.current_session_folder or "",
+                                )
                         self.chunker = None
+
+                    # Drain transcriber queue before transitioning to idle
+                    if self.transcriber:
+                        self.transcriber.wait_drained(timeout=10.0)
 
                     self.state = "idle"
                     await websocket.send(json.dumps({

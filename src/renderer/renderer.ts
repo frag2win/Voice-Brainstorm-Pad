@@ -45,6 +45,7 @@ declare global {
         onStateChange(callback: (state: string) => void): () => void;
         onLevel(callback: (rms: number) => void): () => void;
         onChunk(callback: (chunk: any) => void): () => void;
+        onTranscript(callback: (data: any) => void): () => void;
       };
     };
   }
@@ -549,6 +550,11 @@ async function init(): Promise<void> {
   // Wire Chunk Events
   window.vbp.sidecar.onChunk((chunk: any) => {
     console.log(`[Chunker] Emitted chunk #${chunk.seq} (${chunk.duration_s}s) -> ${chunk.audio_file}`);
+  });
+
+  // Wire Transcript Events (Iteration 4 - output to log)
+  window.vbp.sidecar.onTranscript((data: any) => {
+    console.log(`[Transcriber] #${data.seq} (${data.rtf}x RTF, ${data.words}w): "${data.text}"`);
   });
 
   // Initialize sidecar status tracking
