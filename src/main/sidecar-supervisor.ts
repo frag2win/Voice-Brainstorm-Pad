@@ -158,7 +158,7 @@ export class SidecarSupervisor extends EventEmitter {
           this.setState("error");
           reject(new Error("Timed out waiting for sidecar port announcement"));
         }
-      }, 8000);
+      }, 15000);
 
       try {
         this.child = spawn(this.pythonPath, pyArgs, {
@@ -329,6 +329,10 @@ export class SidecarSupervisor extends EventEmitter {
 
       case "chunk_ready":
         this.emit("chunk", data);
+        break;
+
+      case "transcript":
+        this.emit("transcript", data);
         break;
 
       case "pong":

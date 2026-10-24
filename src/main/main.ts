@@ -167,6 +167,14 @@ app.whenReady().then(() => {
       win.webContents.send("sidecar:chunk", chunk);
     }
   });
+  supervisor.on("transcript", (data) => {
+    console.log(
+      `[Transcriber] chunk #${data.seq} (${data.duration_s}s, RTF ${data.rtf}x, ${data.words} words): "${data.text}"`
+    );
+    if (win && !win.isDestroyed()) {
+      win.webContents.send("sidecar:transcript", data);
+    }
+  });
   supervisor.on("log", (msg) => console.log(`[Sidecar] ${msg}`));
   supervisor.on("error", (err) => console.error(`[Supervisor Error]`, err));
 

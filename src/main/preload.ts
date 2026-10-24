@@ -47,6 +47,7 @@ export interface VbpAPI {
     onStateChange(callback: (state: string) => void): () => void;
     onLevel(callback: (rms: number) => void): () => void;
     onChunk(callback: (chunk: any) => void): () => void;
+    onTranscript(callback: (data: any) => void): () => void;
   };
 }
 
@@ -89,6 +90,13 @@ const api: VbpAPI = {
       ipcRenderer.on("sidecar:chunk", handler);
       return () => {
         ipcRenderer.removeListener("sidecar:chunk", handler);
+      };
+    },
+    onTranscript: (callback: (data: any) => void) => {
+      const handler = (_event: any, data: any) => callback(data);
+      ipcRenderer.on("sidecar:transcript", handler);
+      return () => {
+        ipcRenderer.removeListener("sidecar:transcript", handler);
       };
     },
   },
