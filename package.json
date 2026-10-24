@@ -13,11 +13,12 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "@types/node": "^22.15.30",
+    "@types/ws": "^8.18.2",
     "electron": "^33.4.4",
     "esbuild": "^0.28.2",
     "typescript": "^5.8.3",
-    "vitest": "^3.2.4",
-    "@types/node": "^22.15.30"
+    "vitest": "^3.2.4"
   },
   "dependencies": {
     "@codemirror/commands": "^6.8.1",
@@ -27,6 +28,7 @@
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.37.2",
     "@lezer/highlight": "^1.2.1",
-    "codemirror": "^6.0.2"
+    "codemirror": "^6.0.2",
+    "ws": "^8.22.0"
   }
 }

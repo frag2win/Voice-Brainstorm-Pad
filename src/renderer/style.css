@@ -224,6 +224,152 @@ body {
 #autosave-indicator.saved { color: var(--success); }
 #autosave-indicator.saving { color: var(--text-dim); }
 
+#header-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+/* ── Microphone Selector (FR-10) ─────────────────────────────────────────── */
+.header-select {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  outline: none;
+  cursor: pointer;
+  max-width: 170px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: all var(--transition);
+}
+.header-select:hover { border-color: var(--accent-dim); color: var(--text); }
+.header-select:focus { border-color: var(--accent); }
+
+/* ── Dictation Toggle Button (FR-4) ───────────────────────────────────────── */
+.btn-dictate {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all var(--transition);
+  position: relative;
+  overflow: hidden;
+}
+.btn-dictate:not(:disabled):hover {
+  background: var(--accent-dim);
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+.btn-dictate:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Listening active state */
+.btn-dictate.listening {
+  background: var(--danger);
+  box-shadow: 0 0 12px rgba(224, 92, 115, 0.5);
+  animation: pulse-border 1.5s infinite ease-in-out;
+}
+.btn-dictate.listening:hover {
+  background: #c84960;
+}
+
+@keyframes pulse-border {
+  0%, 100% { box-shadow: 0 0 8px rgba(224, 92, 115, 0.4); }
+  50% { box-shadow: 0 0 16px rgba(224, 92, 115, 0.8); }
+}
+
+/* ── Live Audio Level Meter (FR-10) ───────────────────────────────────────── */
+#level-meter-wrapper {
+  width: 28px;
+  height: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 3px;
+  overflow: hidden;
+  display: none; /* shown while listening */
+  position: relative;
+  vertical-align: middle;
+}
+.btn-dictate.listening #level-meter-wrapper {
+  display: inline-block;
+}
+
+#level-meter-bar {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #5ce0a8 0%, #f5b041 70%, #ff5c73 100%);
+  border-radius: 3px;
+  transition: width 60ms linear;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  transition: all var(--transition);
+  user-select: none;
+}
+
+.pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+  transition: background var(--transition), box-shadow var(--transition);
+}
+
+.pill-ready .pill-dot,
+.pill-idle .pill-dot {
+  background: var(--success);
+  box-shadow: 0 0 8px rgba(92, 224, 168, 0.6);
+}
+
+.pill-listening .pill-dot {
+  background: var(--danger);
+  box-shadow: 0 0 8px rgba(224, 92, 115, 0.8);
+  animation: pulse-dot 0.8s infinite ease-in-out;
+}
+
+.pill-connecting .pill-dot,
+.pill-reconnecting .pill-dot {
+  background: #f5b041;
+  box-shadow: 0 0 6px rgba(245, 176, 65, 0.5);
+  animation: pulse-dot 1.2s infinite ease-in-out;
+}
+
+.pill-disconnected .pill-dot,
+.pill-error .pill-dot {
+  background: var(--danger);
+  box-shadow: 0 0 6px rgba(224, 92, 115, 0.5);
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.3; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
 #word-count {
   font-size: 12px;
   color: var(--text-muted);

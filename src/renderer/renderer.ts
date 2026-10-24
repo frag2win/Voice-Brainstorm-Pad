@@ -17,7 +17,12 @@ import { search, searchKeymap, openSearchPanel } from "@codemirror/search";
 import { markdown } from "@codemirror/lang-markdown";
 import { indentOnInput, syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 
-// ─── Globals ──────────────────────────────────────────────────────────────────
+interface SidecarStatus {
+  state: string;
+  model: string;
+  devices: Array<{ id: string; name: string }>;
+  port: number;
+}
 
 declare global {
   interface Window {
@@ -30,6 +35,16 @@ declare global {
         rename(slug: string, title: string): Promise<void>;
         delete(slug: string): Promise<void>;
         rootPath(): Promise<string>;
+      };
+      sidecar: {
+        getStatus(): Promise<SidecarStatus>;
+        restart(): Promise<void>;
+        startListening(sessionFolder: string, deviceId?: string): Promise<void>;
+        stopListening(): Promise<void>;
+        setDevice(deviceId: string): Promise<void>;
+        onStateChange(callback: (state: string) => void): () => void;
+        onLevel(callback: (rms: number) => void): () => void;
+        onChunk(callback: (chunk: any) => void): () => void;
       };
     };
   }
@@ -46,12 +61,15 @@ interface SessionMeta {
 interface SessionPayload {
   meta: SessionMeta;
   text: string;
+  folderPath: string;
 }
 
 // ─── App state ────────────────────────────────────────────────────────────────
 
 let editorView: EditorView | null = null;
 let currentSlug: string | null = null;
+let currentSessionFolder: string | null = null;
+let currentSidecarState: string = "idle";
 let sessions: SessionMeta[] = [];
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let titleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -74,6 +92,13 @@ const elFormNew       = document.getElementById("form-new-session") as HTMLFormE
 const elInputTitle    = document.getElementById("input-new-title") as HTMLInputElement;
 const elBtnCancel     = document.getElementById("btn-dialog-cancel")!;
 const elRootLabel     = document.getElementById("sessions-root-label")!;
+const elSidecarPill   = document.getElementById("sidecar-status-pill")!;
+const elSidecarText   = document.getElementById("sidecar-status-text")!;
+const elBtnDictate    = document.getElementById("btn-dictate") as HTMLButtonElement;
+const elDictateLabel  = document.getElementById("dictate-label")!;
+const elDictateIcon   = document.getElementById("dictate-icon")!;
+const elLevelBar      = document.getElementById("level-meter-bar")!;
+const elMicSelect     = document.getElementById("mic-select") as HTMLSelectElement;
 
 // ─── CodeMirror setup ─────────────────────────────────────────────────────────
 
@@ -283,10 +308,18 @@ async function handleDeleteSession(slug: string): Promise<void> {
 // ─── Editor visibility ────────────────────────────────────────────────────────
 
 function showEditor(payload: SessionPayload): void {
+  currentSessionFolder = payload.folderPath;
   elEmptyState.style.display = "none";
   elEditorMount.style.display = "block";
   elSessionTitle.disabled = false;
   elSessionTitle.value = payload.meta.title;
+
+  const isAvailable =
+    currentSidecarState !== "disconnected" &&
+    currentSidecarState !== "error" &&
+    currentSidecarState !== "connecting" &&
+    currentSidecarState !== "reconnecting";
+  elBtnDictate.disabled = !isAvailable;
 
   mountEditor(payload.text);
   updateWordCount(payload.text);
@@ -294,11 +327,20 @@ function showEditor(payload: SessionPayload): void {
 }
 
 function hideEditor(): void {
+  if (currentSidecarState === "listening") {
+    window.vbp.sidecar.stopListening().catch(() => {});
+  }
+  currentSessionFolder = null;
   elEditorMount.style.display = "none";
   elEmptyState.style.display = "";
   elSessionTitle.disabled = true;
   elSessionTitle.value = "";
   elWordCount.textContent = "0 words";
+  elBtnDictate.disabled = true;
+  elBtnDictate.classList.remove("listening");
+  elDictateLabel.textContent = "Dictate";
+  elDictateIcon.textContent = "🎙️";
+  elLevelBar.style.width = "0%";
   setAutosaveState("");
 
   if (editorView) {
@@ -398,6 +440,81 @@ function formatRelative(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function updateSidecarStatus(state: string, model?: string): void {
+  currentSidecarState = state;
+  if (!elSidecarPill || !elSidecarText) return;
+  elSidecarPill.className = `pill pill-${state}`;
+  let label = "Connecting…";
+  let tooltip = "Speech engine connection status";
+
+  switch (state) {
+    case "ready":
+    case "idle":
+      label = "Sidecar ready";
+      tooltip = `Speech sidecar connected and idle (${model || "small.en"})`;
+      break;
+    case "listening":
+      label = "Listening…";
+      tooltip = "Speech sidecar is recording and chunking audio";
+      break;
+    case "connecting":
+      label = "Connecting…";
+      tooltip = "Starting speech sidecar…";
+      break;
+    case "reconnecting":
+      label = "Reconnecting…";
+      tooltip = "Speech sidecar restarted, reconnecting…";
+      break;
+    case "disconnected":
+      label = "Sidecar offline";
+      tooltip = "Speech sidecar is offline (typing & editor remain fully functional)";
+      break;
+    case "error":
+      label = "Sidecar error";
+      tooltip = "Speech sidecar error";
+      break;
+    default:
+      label = state;
+      tooltip = `Sidecar state: ${state}`;
+  }
+
+  elSidecarText.textContent = label;
+  elSidecarPill.title = tooltip;
+
+  if (state === "listening") {
+    elBtnDictate.classList.add("listening");
+    elDictateLabel.textContent = "Stop";
+    elDictateIcon.textContent = "⏹";
+  } else {
+    elBtnDictate.classList.remove("listening");
+    elDictateLabel.textContent = "Dictate";
+    elDictateIcon.textContent = "🎙️";
+    elLevelBar.style.width = "0%";
+  }
+
+  const isAvailable =
+    currentSessionFolder !== null &&
+    state !== "disconnected" &&
+    state !== "error" &&
+    state !== "connecting" &&
+    state !== "reconnecting";
+
+  elBtnDictate.disabled = !isAvailable;
+}
+
+function populateDevices(devices: Array<{ id: string; name: string }>): void {
+  if (!devices || devices.length === 0) return;
+  const currentVal = elMicSelect.value;
+  elMicSelect.innerHTML = '<option value="">Default Microphone</option>';
+  for (const dev of devices) {
+    const opt = document.createElement("option");
+    opt.value = dev.id;
+    opt.textContent = dev.name;
+    if (dev.id === currentVal) opt.selected = true;
+    elMicSelect.appendChild(opt);
+  }
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 async function init(): Promise<void> {
@@ -405,6 +522,63 @@ async function init(): Promise<void> {
   const rootPath = await window.vbp.sessions.rootPath();
   elRootLabel.textContent = rootPath;
   elRootLabel.title = rootPath;
+
+  // Wire Dictation Toggle Button
+  elBtnDictate.addEventListener("click", async () => {
+    if (currentSidecarState === "listening") {
+      await window.vbp.sidecar.stopListening();
+    } else if (currentSessionFolder) {
+      const deviceId = elMicSelect.value || undefined;
+      await window.vbp.sidecar.startListening(currentSessionFolder, deviceId);
+    }
+  });
+
+  // Wire Microphone Selector
+  elMicSelect.addEventListener("change", async () => {
+    await window.vbp.sidecar.setDevice(elMicSelect.value);
+  });
+
+  // Wire Live Audio Level Meter
+  window.vbp.sidecar.onLevel((rms: number) => {
+    if (currentSidecarState === "listening") {
+      const pct = Math.min(100, Math.max(0, Math.round(Math.sqrt(rms) * 180)));
+      elLevelBar.style.width = `${pct}%`;
+    }
+  });
+
+  // Wire Chunk Events
+  window.vbp.sidecar.onChunk((chunk: any) => {
+    console.log(`[Chunker] Emitted chunk #${chunk.seq} (${chunk.duration_s}s) -> ${chunk.audio_file}`);
+  });
+
+  // Initialize sidecar status tracking
+  try {
+    const checkStatus = async () => {
+      const status = await window.vbp.sidecar.getStatus();
+      updateSidecarStatus(status.state, status.model);
+      if (status.devices && status.devices.length > 0) {
+        populateDevices(status.devices);
+      }
+      return status.state;
+    };
+
+    const initialState = await checkStatus();
+    if (initialState === "connecting" || initialState === "disconnected") {
+      const pollTimer = setInterval(async () => {
+        const st = await checkStatus();
+        if (st !== "connecting" && st !== "disconnected") {
+          clearInterval(pollTimer);
+        }
+      }, 500);
+      setTimeout(() => clearInterval(pollTimer), 10000);
+    }
+
+    window.vbp.sidecar.onStateChange((state) => {
+      updateSidecarStatus(state);
+    });
+  } catch (err) {
+    console.warn("Could not query sidecar status:", err);
+  }
 
   // Load session list
   sessions = await window.vbp.sessions.list();
@@ -417,3 +591,4 @@ async function init(): Promise<void> {
 }
 
 init().catch(console.error);
+
