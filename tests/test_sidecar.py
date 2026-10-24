@@ -61,11 +61,11 @@ def test_handshake_with_valid_token_succeeds():
                 assert ready_msg["version"] == 1
                 assert "devices" in ready_msg
 
-                # Second expected response: state (idle)
+                # Second expected response: state (loading or idle depending on model load)
                 raw_state = await asyncio.wait_for(ws.recv(), timeout=2.0)
                 state_msg = json.loads(raw_state)
                 assert state_msg["type"] == "state"
-                assert state_msg["state"] == "idle"
+                assert state_msg["state"] in ("loading", "idle")
     asyncio.run(_test())
 
 

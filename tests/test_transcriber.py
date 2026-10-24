@@ -106,9 +106,10 @@ def test_transcriber_sequential_order(tmp_path, shared_transcriber):
     assert [t.seq for t in transcripts] == [1, 2, 3]
 
 
-def test_transcriber_updates_chunks_jsonl(tmp_path, shared_transcriber):
-    jsonl_path = tmp_path / "chunks.jsonl"
-    with open(jsonl_path, "w", encoding="utf-8") as f:
+def test_transcriber_appends_to_transcripts_jsonl(tmp_path, shared_transcriber):
+    transcripts_path = tmp_path / "transcripts.jsonl"
+    chunks_path = tmp_path / "chunks.jsonl"
+    with open(chunks_path, "w", encoding="utf-8") as f:
         f.write(json.dumps({"seq": 1, "duration_s": 1.0, "audio_file": "chunks/chunk_0001.wav"}) + "\n")
 
     shared_transcriber.on_transcript = None
@@ -132,11 +133,21 @@ def test_transcriber_updates_chunks_jsonl(tmp_path, shared_transcriber):
     shared_transcriber.enqueue(seq=1, audio_path=wav_file, duration_s=1.0, session_dir=str(tmp_path))
     shared_transcriber.wait_drained(timeout=5.0)
 
-    # Read jsonl and verify text, model, rtf fields exist
-    with open(jsonl_path, "r", encoding="utf-8") as f:
+    # Read transcripts.jsonl and verify metrics exist
+    assert os.path.isfile(transcripts_path)
+    with open(transcripts_path, "r", encoding="utf-8") as f:
         lines = [json.loads(line) for line in f if line.strip()]
 
     assert len(lines) == 1
+    assert lines[0]["seq"] == 1
     assert "model" in lines[0]
     assert "rtf" in lines[0]
-    assert "transcribe_ms" in lines[0]
+    assert "transcribe_s" in lines[0]
+    assert "queue_wait_ms" in lines[0]
+    assert "latency_ms" in lines[0]
+
+    # Verify chunks.jsonl remained strictly untouched and append-only
+    with open(chunks_path, "r", encoding="utf-8") as f:
+        chunk_lines = [json.loads(line) for line in f if line.strip()]
+    assert len(chunk_lines) == 1
+    assert "model" not in chunk_lines[0]

@@ -87,6 +87,8 @@ def list_audio_devices() -> List[Dict[str, Any]]:
                     "channels": dev.get("max_input_channels", 1),
                     "default_samplerate": dev.get("default_samplerate", 16000),
                 })
+    except (ImportError, OSError) as e:
+        logger.warning(f"PortAudio or sounddevice unavailable: {e}")
     except Exception as e:
         logger.warning(f"Could not query audio devices: {e}")
     return devices
@@ -99,7 +101,7 @@ class SidecarServer:
         self.token = token or os.environ.get("VBP_SIDECAR_TOKEN", "")
         self.server: Optional[Server] = None
         self.port: int = 0
-        self.state: str = "idle"
+        self.state: str = "loading"
         self._stop_event = asyncio.Event()
 
         # Recorder, Chunker & Transcriber components (Iteration 3 & 4)
@@ -114,7 +116,7 @@ class SidecarServer:
     def _on_transcript(self, result: TranscriptionResult) -> None:
         """Called by Transcriber worker thread when transcription of a chunk completes."""
         logger.info(
-            f"[Transcriber] chunk #{result.seq} ({result.audio_s:.1f}s, RTF {result.rtf:.2f}x, {result.word_count} words) -> \"{result.text}\""
+            f"[Transcriber] chunk #{result.seq} ({result.audio_s:.1f}s, RTF {result.rtf:.2f}x, {result.word_count} words, {result.latency_ms:.0f}ms latency) -> \"{result.text}\""
         )
         ws = self._active_ws
         loop = self._loop
@@ -136,6 +138,7 @@ class SidecarServer:
                         "transcribe_s": round(result.transcribe_s, 3),
                         "rtf": round(result.rtf, 3),
                         "words": result.word_count,
+                        "queue_wait_ms": round(result.queue_wait_ms, 1),
                         "latency_ms": round(result.latency_ms, 1),
                         "queue_depth": result.queue_depth,
                         "audio_file": result.audio_file,
@@ -171,6 +174,7 @@ class SidecarServer:
                     on_transcript=self._on_transcript,
                     auto_warmup=True,
                 )
+                self.state = "idle"
             except Exception as e:
                 logger.warning(f"Could not load small.en model ({e}), falling back to base.en")
                 try:
@@ -179,8 +183,31 @@ class SidecarServer:
                         on_transcript=self._on_transcript,
                         auto_warmup=True,
                     )
+                    self.state = "idle"
                 except Exception as e2:
                     logger.error(f"Failed to load Whisper model: {e2}")
+                    self.state = "error"
+
+            # If client is already connected during model load, push updated state & ready info
+            if self._active_ws and self._loop:
+                devices = list_audio_devices()
+                ready_payload = json.dumps({
+                    "type": "ready",
+                    "version": PROTOCOL_VERSION,
+                    "engine": "faster-whisper",
+                    "model": self.transcriber.config.model_name if self.transcriber else "",
+                    "devices": devices,
+                })
+                state_payload = json.dumps({
+                    "type": "state",
+                    "version": PROTOCOL_VERSION,
+                    "state": self.state,
+                })
+                try:
+                    asyncio.run_coroutine_threadsafe(self._active_ws.send(ready_payload), self._loop)
+                    asyncio.run_coroutine_threadsafe(self._active_ws.send(state_payload), self._loop)
+                except Exception:
+                    pass
 
         self._load_task = loop.run_in_executor(None, _load)
 
@@ -239,7 +266,7 @@ class SidecarServer:
             "type": "ready",
             "version": PROTOCOL_VERSION,
             "engine": "faster-whisper",
-            "model": self.transcriber.config.model_name if self.transcriber else "small.en",
+            "model": self.transcriber.config.model_name if (self.transcriber and self.transcriber.is_ready) else "",
             "devices": devices,
         }
         await websocket.send(json.dumps(ready_payload))
@@ -276,6 +303,20 @@ class SidecarServer:
                         logger.info("Waiting for background transcriber warmup to finish before starting dictation...")
                         await self._load_task
                         self._load_task = None
+
+                    if not self.transcriber or not self.transcriber.is_ready:
+                        logger.error("Refusing to enter listening: transcriber is not ready or failed to load")
+                        await websocket.send(json.dumps({
+                            "type": "error",
+                            "version": PROTOCOL_VERSION,
+                            "message": "Whisper transcriber is not ready or failed to load.",
+                        }))
+                        await websocket.send(json.dumps({
+                            "type": "state",
+                            "version": PROTOCOL_VERSION,
+                            "state": self.state,
+                        }))
+                        continue
 
                     session_folder = data.get("session_folder", "")
                     dev_arg = data.get("device_id")
@@ -394,9 +435,17 @@ class SidecarServer:
                                 )
                         self.chunker = None
 
-                    # Drain transcriber queue before transitioning to idle
-                    if self.transcriber:
-                        self.transcriber.wait_drained(timeout=10.0)
+                    # Drain transcriber queue asynchronously before transitioning to idle (Defect 3 fix)
+                    if self.transcriber and self.transcriber.has_pending():
+                        self.state = "catching_up"
+                        await websocket.send(json.dumps({
+                            "type": "state",
+                            "version": PROTOCOL_VERSION,
+                            "state": "catching_up",
+                            "pending_chunks": self.transcriber.pending_count,
+                        }))
+                        while self.transcriber and self.transcriber.has_pending():
+                            await asyncio.sleep(0.05)
 
                     self.state = "idle"
                     await websocket.send(json.dumps({
@@ -456,7 +505,14 @@ class SidecarServer:
                 self.recorder.stop()
                 self.recorder = None
             if self.chunker:
-                self.chunker.flush()
+                final_chunk = self.chunker.flush()
+                if final_chunk and self.transcriber:
+                    self.transcriber.enqueue(
+                        seq=final_chunk.seq,
+                        audio_path=final_chunk.file_path,
+                        duration_s=final_chunk.duration_s,
+                        session_dir=self.current_session_folder or "",
+                    )
                 self.chunker = None
             self.state = "idle"
 

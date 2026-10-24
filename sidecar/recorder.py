@@ -22,7 +22,8 @@ logger = logging.getLogger("recorder")
 
 try:
     import sounddevice as sd  # type: ignore
-except ImportError:
+except (ImportError, OSError) as e:
+    logger.warning(f"sounddevice or PortAudio library unavailable: {e}")
     sd = None
 
 
@@ -158,16 +159,11 @@ class AudioRecorder:
         if not self.is_recording:
             return
 
-        # Flatten to 1D float32
-        data = indata[:, 0].copy()
-        self._queue.put(data)
+        if status:
+            logger.warning(f"Audio stream status: {status}")
 
-        # Compute level at ~10 Hz (every 100ms)
-        now = time.time()
-        if self.on_level and (now - self._last_level_time) >= 0.1:
-            self._last_level_time = now
-            rms = float(np.sqrt(np.mean(data ** 2)))
-            self.on_level(rms)
+        # Flatten to 1D float32 and enqueue immediately
+        self._queue.put(indata[:, 0].copy())
 
     def _worker_loop(self):
         """Worker thread drains audio queue, writes to audio.wav and dispatches frames."""
@@ -177,14 +173,27 @@ class AudioRecorder:
             except queue.Empty:
                 continue
 
-            if self.wav_writer:
-                self.wav_writer.write_samples(frame)
+            try:
+                if self.wav_writer:
+                    self.wav_writer.write_samples(frame)
 
-            if self.on_frame:
-                try:
-                    self.on_frame(frame)
-                except Exception as e:
-                    pass
+                # Compute RMS level at ~10 Hz (every 100ms) on worker thread
+                now = time.time()
+                if self.on_level and (now - self._last_level_time) >= 0.1:
+                    self._last_level_time = now
+                    rms = float(np.sqrt(np.mean(frame ** 2)))
+                    try:
+                        self.on_level(rms)
+                    except Exception as e:
+                        logger.error(f"Error in on_level callback: {e}")
+
+                if self.on_frame:
+                    try:
+                        self.on_frame(frame)
+                    except Exception as e:
+                        logger.error(f"Error in on_frame callback: {e}", exc_info=True)
+            finally:
+                self._queue.task_done()
 
     def start(self, session_dir: str, device: Optional[int | str] = None) -> str:
         """Start recording into session_dir/audio.wav."""

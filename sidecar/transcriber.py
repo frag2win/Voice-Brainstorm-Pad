@@ -75,7 +75,10 @@ class TranscriberConfig:
     language: str = "en"
     beam_size: int = 1
     condition_on_previous_text: bool = False
-    temperature: float = 0.0
+    temperature: tuple = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
+    compression_ratio_threshold: float = 2.4
+    log_prob_threshold: float = -1.0
+    no_speech_threshold: float = 0.6
 
 
 @dataclass
@@ -86,6 +89,7 @@ class TranscriptionResult:
     transcribe_s: float
     rtf: float
     word_count: int
+    queue_wait_ms: float
     latency_ms: float
     queue_depth: int
     audio_file: str
@@ -102,6 +106,7 @@ class Transcriber:
         self.on_transcript = on_transcript
         self.model: Optional[WhisperModel] = None
         self.is_ready = False
+        self._last_prompt_text = ""
 
         self._queue: queue.Queue = queue.Queue()
         self._stop_event = threading.Event()
@@ -110,8 +115,15 @@ class Transcriber:
         self._load_model(auto_warmup=auto_warmup)
         self._start_worker()
 
+    @property
+    def pending_count(self) -> int:
+        return self._queue.unfinished_tasks
+
+    def has_pending(self) -> bool:
+        return self._queue.unfinished_tasks > 0
+
     def _load_model(self, auto_warmup: bool = True) -> None:
-        """Load the faster-whisper model and optionally run warmup."""
+        """Load the faster-whisper model, attempting local offline cache first (G4, NFR-6)."""
         if WhisperModel is None:
             logger.error("faster-whisper is not installed")
             return
@@ -120,13 +132,26 @@ class Transcriber:
         logger.info(
             f"Loading Whisper model '{self.config.model_name}' ({self.config.compute_type}, {self.config.cpu_threads} threads)..."
         )
-        self.model = WhisperModel(
-            self.config.model_name,
-            device=self.config.device,
-            compute_type=self.config.compute_type,
-            cpu_threads=self.config.cpu_threads,
-            num_workers=self.config.num_workers,
-        )
+        try:
+            # Try offline local cache first
+            self.model = WhisperModel(
+                self.config.model_name,
+                device=self.config.device,
+                compute_type=self.config.compute_type,
+                cpu_threads=self.config.cpu_threads,
+                num_workers=self.config.num_workers,
+                local_files_only=True,
+            )
+        except Exception:
+            # Fallback to downloading if not present in local cache
+            self.model = WhisperModel(
+                self.config.model_name,
+                device=self.config.device,
+                compute_type=self.config.compute_type,
+                cpu_threads=self.config.cpu_threads,
+                num_workers=self.config.num_workers,
+                local_files_only=False,
+            )
         load_time = time.time() - t0
         logger.info(f"Whisper model loaded in {load_time:.2f}s")
         self.is_ready = True
@@ -196,19 +221,28 @@ class Transcriber:
             return
 
         t0 = time.time()
+        queue_wait_ms = (t0 - item["enqueued_at"]) * 1000
+
+        # TRD D3: Initial prompt from previous chunk for context continuity
+        prompt = self._last_prompt_text if self._last_prompt_text else None
+
         segments, _ = self.model.transcribe(
             audio_path,
             language=self.config.language,
             beam_size=self.config.beam_size,
             condition_on_previous_text=self.config.condition_on_previous_text,
             temperature=self.config.temperature,
-            vad_filter=False,  # We already did VAD in chunker
+            compression_ratio_threshold=self.config.compression_ratio_threshold,
+            log_prob_threshold=self.config.log_prob_threshold,
+            no_speech_threshold=self.config.no_speech_threshold,
+            initial_prompt=prompt,
+            vad_filter=False,  # VAD already handled by Silero in chunker
         )
 
         texts = []
         for s in segments:
-            # If segment is high probability non-speech, skip it
-            if getattr(s, "no_speech_prob", 0.0) > 0.70:
+            # Keep segments unless confidence is overwhelmingly non-speech
+            if getattr(s, "no_speech_prob", 0.0) > 0.90 and getattr(s, "avg_logprob", 0.0) < -1.5:
                 continue
             txt = s.text.strip()
             if txt:
@@ -220,15 +254,18 @@ class Transcriber:
         transcribe_s = time.time() - t0
         rtf = transcribe_s / max(0.01, duration_s)
         word_count = len(clean_text.split()) if clean_text else 0
-        latency_ms = (time.time() - item["enqueued_at"]) * 1000
+        # End-to-end latency from speech start: chunk duration + queue wait + transcribe time
+        latency_ms = (duration_s * 1000.0) + ((time.time() - item["enqueued_at"]) * 1000.0)
 
-        # Log metrics to terminal (Iteration 4 core requirement)
+        if clean_text:
+            # Retain last 25 words as initial_prompt for the next chunk
+            words = clean_text.split()
+            self._last_prompt_text = " ".join(words[-25:])
+
+        # Log metrics to terminal (Iteration 4 core requirement, NFR-2)
         logger.info(
-            f"[Transcriber] chunk #{seq} ({duration_s:.1f}s, RTF {rtf:.2f}x, {word_count} words) -> \"{clean_text}\""
+            f"[Transcriber] chunk #{seq} ({duration_s:.1f}s, RTF {rtf:.2f}x, {word_count} words, {latency_ms:.0f}ms end-to-end latency) -> \"{clean_text}\""
         )
-
-        # Update chunks.jsonl with transcription details
-        self._update_jsonl(session_dir, seq, clean_text, rtf, transcribe_s)
 
         res = TranscriptionResult(
             seq=seq,
@@ -237,10 +274,14 @@ class Transcriber:
             transcribe_s=transcribe_s,
             rtf=rtf,
             word_count=word_count,
+            queue_wait_ms=queue_wait_ms,
             latency_ms=latency_ms,
             queue_depth=queue_depth,
             audio_file=audio_path,
         )
+
+        # Append to append-only transcripts.jsonl (Defect 1 fix)
+        self._append_transcript(session_dir, res)
 
         if self.on_transcript:
             try:
@@ -248,34 +289,31 @@ class Transcriber:
             except Exception as e:
                 logger.error(f"Error in on_transcript callback: {e}")
 
-    def _update_jsonl(self, session_dir: str, seq: int, text: str, rtf: float, transcribe_s: float) -> None:
-        """Update audit entry in chunks.jsonl with text and metrics."""
-        jsonl_path = os.path.join(session_dir, "chunks.jsonl")
-        if not os.path.exists(jsonl_path):
+    def _append_transcript(self, session_dir: str, res: TranscriptionResult) -> None:
+        """Append transcription result to append-only transcripts.jsonl (Defect 1 fix)."""
+        if not session_dir or not os.path.exists(session_dir):
             return
 
+        transcripts_path = os.path.join(session_dir, "transcripts.jsonl")
+        entry = {
+            "seq": res.seq,
+            "text": res.text,
+            "words": res.word_count,
+            "duration_s": round(res.audio_s, 3),
+            "transcribe_s": round(res.transcribe_s, 3),
+            "rtf": round(res.rtf, 3),
+            "queue_wait_ms": round(res.queue_wait_ms, 1),
+            "latency_ms": round(res.latency_ms, 1),
+            "model": self.config.model_name,
+            "audio_file": res.audio_file,
+            "timestamp": time.time(),
+        }
         try:
-            lines = []
-            updated = False
-            with open(jsonl_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line_str = line.strip()
-                    if not line_str:
-                        continue
-                    data = json.loads(line_str)
-                    if data.get("seq") == seq:
-                        data["text"] = text
-                        data["rtf"] = round(rtf, 3)
-                        data["transcribe_ms"] = round(transcribe_s * 1000, 1)
-                        data["model"] = self.config.model_name
-                        updated = True
-                    lines.append(json.dumps(data) + "\n")
-
-            if updated:
-                with open(jsonl_path, "w", encoding="utf-8") as f:
-                    f.writelines(lines)
+            with open(transcripts_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry) + "\n")
+                f.flush()
         except Exception as e:
-            logger.warning(f"Could not update chunks.jsonl for chunk #{seq}: {e}")
+            logger.warning(f"Could not append to transcripts.jsonl for chunk #{res.seq}: {e}")
 
     def wait_drained(self, timeout: float = 15.0) -> bool:
         """Wait until all queued and in-flight chunks have finished transcribing."""
