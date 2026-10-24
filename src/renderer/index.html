@@ -45,6 +45,14 @@
         <span id="autosave-indicator" aria-live="polite"></span>
       </div>
       <div id="header-meta">
+        <!-- Anchor controls (Iteration 5 - FR-6) -->
+        <button id="btn-move-anchor" class="btn-anchor" title="Move dictation anchor to caret (Ctrl+Alt+A)" aria-label="Dictate here">
+          <span aria-hidden="true">⚓</span> Dictate Here
+        </button>
+        <button id="btn-jump-anchor" class="btn-anchor" title="Jump cursor to dictation anchor (Ctrl+Alt+J)" aria-label="Jump to anchor">
+          Jump to ⚓
+        </button>
+
         <!-- Mic selection dropdown (FR-10) -->
         <select id="mic-select" class="header-select" title="Microphone selection" aria-label="Microphone selection">
           <option value="">Default Microphone</option>
