@@ -277,14 +277,15 @@ class Transcriber:
         except Exception as e:
             logger.warning(f"Could not update chunks.jsonl for chunk #{seq}: {e}")
 
-    def wait_drained(self, timeout: float = 15.0) -> None:
-        """Wait until all queued chunks have been transcribed."""
+    def wait_drained(self, timeout: float = 15.0) -> bool:
+        """Wait until all queued and in-flight chunks have finished transcribing."""
         t_start = time.time()
-        while not self._queue.empty():
+        while self._queue.unfinished_tasks > 0:
             if time.time() - t_start > timeout:
                 logger.warning("Timed out waiting for transcriber queue to drain")
-                break
+                return False
             time.sleep(0.05)
+        return True
 
     def stop(self) -> None:
         """Stop transcriber worker."""

@@ -41,10 +41,15 @@ except ModuleNotFoundError:
 try:
     from websockets.asyncio.server import serve, Server
     from websockets.exceptions import ConnectionClosed
+    from websockets.protocol import State
 except ImportError:
     # Fallback if older websockets version is present
     from websockets.server import serve, WebSocketServer as Server  # type: ignore
     from websockets.exceptions import ConnectionClosed  # type: ignore
+    try:
+        from websockets.protocol import State  # type: ignore
+    except ImportError:
+        State = None
 
 logging.basicConfig(
     level=logging.INFO,
@@ -111,24 +116,33 @@ class SidecarServer:
         logger.info(
             f"[Transcriber] chunk #{result.seq} ({result.audio_s:.1f}s, RTF {result.rtf:.2f}x, {result.word_count} words) -> \"{result.text}\""
         )
-        if self._active_ws and self._loop and not getattr(self._active_ws, "closed", True):
-            try:
-                msg = json.dumps({
-                    "type": "transcript",
-                    "version": PROTOCOL_VERSION,
-                    "seq": result.seq,
-                    "text": result.text,
-                    "duration_s": result.audio_s,
-                    "transcribe_s": round(result.transcribe_s, 3),
-                    "rtf": round(result.rtf, 3),
-                    "words": result.word_count,
-                    "latency_ms": round(result.latency_ms, 1),
-                    "queue_depth": result.queue_depth,
-                    "audio_file": result.audio_file,
-                })
-                asyncio.run_coroutine_threadsafe(self._active_ws.send(msg), self._loop)
-            except Exception as e:
-                logger.error(f"Error sending transcript message: {e}")
+        ws = self._active_ws
+        loop = self._loop
+        if ws and loop:
+            is_open = True
+            if hasattr(ws, "state"):
+                is_open = (ws.state == State.OPEN) if State else (getattr(ws.state, "name", "") == "OPEN")
+            elif hasattr(ws, "closed"):
+                is_open = not ws.closed
+
+            if is_open:
+                try:
+                    msg = json.dumps({
+                        "type": "transcript",
+                        "version": PROTOCOL_VERSION,
+                        "seq": result.seq,
+                        "text": result.text,
+                        "duration_s": result.audio_s,
+                        "transcribe_s": round(result.transcribe_s, 3),
+                        "rtf": round(result.rtf, 3),
+                        "words": result.word_count,
+                        "latency_ms": round(result.latency_ms, 1),
+                        "queue_depth": result.queue_depth,
+                        "audio_file": result.audio_file,
+                    })
+                    asyncio.run_coroutine_threadsafe(ws.send(msg), loop)
+                except Exception as e:
+                    logger.error(f"Error sending transcript message: {e}")
 
     async def start(self) -> None:
         """Start the WebSocket server on 127.0.0.1 and record the assigned port."""
@@ -436,6 +450,8 @@ class SidecarServer:
         except Exception as e:
             logger.error(f"Error handling connection: {e}", exc_info=True)
         finally:
+            if self._active_ws == websocket:
+                self._active_ws = None
             if self.recorder:
                 self.recorder.stop()
                 self.recorder = None
