@@ -115,6 +115,7 @@ class SidecarServer:
         self.current_session_folder: Optional[str] = None
         self._active_ws: Optional[Any] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._drain_task: Optional[asyncio.Task] = None
 
     def _on_transcript(self, result: TranscriptionResult) -> None:
         """Called by Transcriber worker thread when transcription of a chunk completes."""
@@ -302,6 +303,9 @@ class SidecarServer:
                     await websocket.send(json.dumps(pong_msg))
 
                 elif msg_type == "start":
+                    if self._drain_task and not self._drain_task.done():
+                        self._drain_task.cancel()
+
                     if self._load_task and not self._load_task.done():
                         logger.info("Waiting for background transcriber warmup to finish before starting dictation...")
                         await self._load_task
@@ -438,24 +442,18 @@ class SidecarServer:
                                 )
                         self.chunker = None
 
-                    # Drain transcriber queue asynchronously before transitioning to idle (Defect 3 fix)
+                    # Drain transcriber queue asynchronously via background task (Catch-up blocker fix)
                     if self.transcriber and self.transcriber.has_pending():
-                        self.state = "catching_up"
+                        if self._drain_task and not self._drain_task.done():
+                            self._drain_task.cancel()
+                        self._drain_task = asyncio.create_task(self._drain_then_idle())
+                    else:
+                        self.state = "idle"
                         await websocket.send(json.dumps({
                             "type": "state",
                             "version": PROTOCOL_VERSION,
-                            "state": "catching_up",
-                            "pending_chunks": self.transcriber.pending_count,
+                            "state": "idle",
                         }))
-                        while self.transcriber and self.transcriber.has_pending():
-                            await asyncio.sleep(0.05)
-
-                    self.state = "idle"
-                    await websocket.send(json.dumps({
-                        "type": "state",
-                        "version": PROTOCOL_VERSION,
-                        "state": "idle",
-                    }))
                     logger.info("Dictation stopped cleanly")
 
                 elif msg_type == "set_device":
@@ -502,6 +500,8 @@ class SidecarServer:
         except Exception as e:
             logger.error(f"Error handling connection: {e}", exc_info=True)
         finally:
+            if self._drain_task and not self._drain_task.done():
+                self._drain_task.cancel()
             if self._active_ws == websocket:
                 self._active_ws = None
             if self.recorder:
@@ -518,6 +518,49 @@ class SidecarServer:
                     )
                 self.chunker = None
             self.state = "idle"
+
+    async def _drain_then_idle(self) -> None:
+        """Drain transcriber queue in background without blocking WebSocket loop."""
+        try:
+            ws = self._active_ws
+            if not ws or not self.transcriber:
+                self.state = "idle"
+                return
+
+            self.state = "catching_up"
+            last_n = self.transcriber.pending_count
+            await ws.send(json.dumps({
+                "type": "state",
+                "version": PROTOCOL_VERSION,
+                "state": "catching_up",
+                "pending_chunks": last_n,
+            }))
+
+            while self.transcriber and self.transcriber.has_pending():
+                await asyncio.sleep(0.05)
+                cur_n = self.transcriber.pending_count
+                if cur_n != last_n:
+                    last_n = cur_n
+                    if last_n > 0:
+                        await ws.send(json.dumps({
+                            "type": "state",
+                            "version": PROTOCOL_VERSION,
+                            "state": "catching_up",
+                            "pending_chunks": last_n,
+                        }))
+
+            self.state = "idle"
+            await ws.send(json.dumps({
+                "type": "state",
+                "version": PROTOCOL_VERSION,
+                "state": "idle",
+            }))
+            logger.info("Transcriber queue fully drained; sidecar transitioned to idle")
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Error during drain_then_idle: {e}")
+
 
 
 async def run_server() -> None:
