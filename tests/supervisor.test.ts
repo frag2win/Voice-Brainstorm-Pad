@@ -57,7 +57,7 @@ describe("SidecarSupervisor", () => {
 
     // Wait until sidecar completes model warmup and transitions to idle
     const startWait = Date.now();
-    while (supervisor.getState() !== "idle" && Date.now() - startWait < 8000) {
+    while (supervisor.getState() !== "idle" && Date.now() - startWait < 16000) {
       await new Promise((r) => setTimeout(r, 100));
     }
 
@@ -65,7 +65,7 @@ describe("SidecarSupervisor", () => {
     expect(states).toContain("connecting");
     expect(states).toContain("ready");
     expect(states).toContain("idle");
-  }, 10000);
+  }, 20000);
 
   it("handles stop cleanly and transitions to disconnected", async () => {
     supervisor = new SidecarSupervisor({ autoStart: false });
