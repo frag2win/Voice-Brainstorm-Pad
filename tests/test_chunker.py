@@ -49,6 +49,10 @@ class ScriptedVAD:
         return [self.default_prob]
 
 
+# Alias for test compatibility
+MockVad = ScriptedVAD
+
+
 def make_frame(amplitude: float = 0.5, frame_size: int = 512) -> np.ndarray:
     """Create a constant or tone frame for testing."""
     return np.full(frame_size, amplitude, dtype=np.float32)
@@ -295,3 +299,63 @@ def test_chunk_files_and_jsonl_written_to_disk(temp_session_dir):
     assert "t_start" in lines[0]
     assert "t_end" in lines[0]
     assert "audio_file" in lines[0]
+
+
+def test_long_pause_cut_with_sufficient_speech(temp_session_dir):
+    """
+    5 s speech + 3 s silence -> exactly one chunk cut at the pause.
+    Frame size = 512 samples (32ms).
+    5.0s speech = 157 frames.
+    3.0s silence = 94 frames.
+    """
+    vad = MockVad(default_prob=0.0)
+    # Frames 0..157 are speech (0.9 probability)
+    vad.add_range(0, 157, 0.9)
+
+    config = ChunkerConfig(pause_cut_s=2.5)
+    chunker = AudioChunker(session_dir=temp_session_dir, config=config, vad_fn=vad)
+
+    emitted = []
+    # Feed 157 speech frames (5.024s) + 94 silence frames (3.008s) = 251 frames
+    for _ in range(251):
+        chunk = chunker.process_frame(make_frame(amplitude=0.3))
+        if chunk:
+            emitted.append(chunk)
+
+    final = chunker.flush()
+    if final:
+        emitted.append(final)
+
+    assert len(emitted) == 1, f"Expected exactly one chunk cut at pause, got {len(emitted)}"
+    assert emitted[0].seq == 1
+    # Chunk should contain speech + pause cut (around 7.5s)
+    assert 7.0 <= emitted[0].duration_s <= 8.0
+
+
+def test_long_pause_with_insufficient_speech_discards_as_noise(temp_session_dir):
+    """
+    0.5 s speech + 3 s silence -> no cut (discard as noise).
+    Frame size = 512 samples (32ms).
+    0.5s speech = 16 frames.
+    3.0s silence = 94 frames.
+    """
+    vad = MockVad(default_prob=0.0)
+    # Frames 0..16 are speech (0.9 probability)
+    vad.add_range(0, 16, 0.9)
+
+    config = ChunkerConfig(pause_cut_s=2.5)
+    chunker = AudioChunker(session_dir=temp_session_dir, config=config, vad_fn=vad)
+
+    emitted = []
+    # Feed 16 speech frames (0.512s) + 94 silence frames (3.008s) = 110 frames
+    for _ in range(110):
+        chunk = chunker.process_frame(make_frame(amplitude=0.3))
+        if chunk:
+            emitted.append(chunk)
+
+    final = chunker.flush()
+    if final:
+        emitted.append(final)
+
+    assert len(emitted) == 0, f"Expected 0 chunks (discarded as noise), got {len(emitted)}"
+

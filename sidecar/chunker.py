@@ -35,6 +35,7 @@ class ChunkerConfig:
     target_chunk_s: float = 8.0
     max_chunk_s: float = 15.0       # Progressive cut limit (reduced from 20s to meet 10s latency target)
     min_silence_s: float = 0.3      # 300ms pause target
+    pause_cut_s: float = 2.5        # Long pause cut threshold (matches paragraph break threshold)
     speech_padding_s: float = 0.2
     vad_threshold: float = 0.5
     energy_threshold: float = 0.003  # Preserves quiet speech from laptop microphones
@@ -135,7 +136,23 @@ class AudioChunker:
         cur_duration = self._current_chunk_samples / self.config.sample_rate
         silence_duration = self._silence_samples / self.config.sample_rate
 
-        # ── Cut Decision Rules (Defect 4: Progressive pauses + Quietest frame) ──
+        # ── Cut Decision Rules ──
+        # Long-pause rule: if trailing silence >= pause_cut_s (default 2.5s) and speech >= 1.0s, cut immediately
+        if silence_duration >= self.config.pause_cut_s:
+            speech_frames = sum(1 for flag in self._buffer_is_speech if flag)
+            speech_s = speech_frames * self.config.frame_size / self.config.sample_rate
+            if speech_s >= 1.0:
+                return self._emit_chunk()
+            else:
+                # Discard as noise: clear buffer and advance timeline
+                self._total_samples_emitted += self._current_chunk_samples
+                self._buffer = []
+                self._buffer_is_speech = []
+                self._current_chunk_samples = 0
+                self._silence_samples = 0
+                self._has_speech = False
+                return None
+
         # Progressive pauses: shorter pauses are accepted as chunk grows longer
         if cur_duration >= 12.0 and silence_duration >= 0.08:
             return self._emit_chunk()
