@@ -350,3 +350,68 @@ def test_temperature_fallback_logging_on_segments(tmp_path, caplog):
     assert len(normal_warnings) == 0
     transcriber2.stop()
 
+
+def test_chunk_failure_on_missing_model_and_missing_audio_file(tmp_path):
+    """Verify that early returns for missing model or non-existent audio call _handle_chunk_failure."""
+    config = TranscriberConfig(model_name="tiny.en")
+    failed_events = []
+
+    # 1. Test missing model
+    transcriber_no_model = Transcriber(config=config, auto_warmup=False, model=None)
+    transcriber_no_model.model = None
+    transcriber_no_model.on_chunk_failed = lambda evt: failed_events.append(evt)
+
+    # Valid dummy wav file
+    wav_file = str(tmp_path / "chunk_0050.wav")
+    sample_rate = 16000
+    pcm16 = np.zeros(sample_rate * 1, dtype=np.int16)
+    import struct
+    data_bytes = pcm16.tobytes()
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF", 36 + len(data_bytes), b"WAVE", b"fmt ",
+        16, 1, 1, sample_rate, sample_rate * 2, 2, 16,
+        b"data", len(data_bytes)
+    )
+    with open(wav_file, "wb") as f:
+        f.write(header)
+        f.write(data_bytes)
+
+    transcriber_no_model.enqueue(seq=50, audio_path=wav_file, duration_s=1.0, session_dir=str(tmp_path))
+    transcriber_no_model.wait_drained(timeout=5.0)
+    transcriber_no_model.stop()
+
+    assert len(failed_events) == 1
+    assert failed_events[0]["type"] == "chunk_failed"
+    assert failed_events[0]["seq"] == 50
+    assert "model" in failed_events[0]["error"].lower()
+
+    # 2. Test missing audio file
+    class DummyModel:
+        def transcribe(self, *args, **kwargs):
+            return [], type("Info", (), {})()
+
+    failed_events.clear()
+    transcriber_with_model = Transcriber(config=config, auto_warmup=False, model=DummyModel())
+    transcriber_with_model.on_chunk_failed = lambda evt: failed_events.append(evt)
+
+    non_existent_wav = str(tmp_path / "does_not_exist_9999.wav")
+    transcriber_with_model.enqueue(seq=51, audio_path=non_existent_wav, duration_s=1.0, session_dir=str(tmp_path))
+    transcriber_with_model.wait_drained(timeout=5.0)
+    transcriber_with_model.stop()
+
+    assert len(failed_events) == 1
+    assert failed_events[0]["type"] == "chunk_failed"
+    assert failed_events[0]["seq"] == 51
+    assert "does not exist" in failed_events[0]["error"].lower()
+
+    # Verify failure records in transcripts.jsonl
+    transcripts_path = tmp_path / "transcripts.jsonl"
+    assert os.path.isfile(transcripts_path)
+    with open(transcripts_path, "r", encoding="utf-8") as f:
+        lines = [json.loads(line) for line in f if line.strip()]
+    seqs = [rec["seq"] for rec in lines if rec.get("failed")]
+    assert 50 in seqs
+    assert 51 in seqs
+
+

@@ -296,8 +296,28 @@ class Transcriber:
         except Exception as e:
             logger.debug(f"Could not retrieve memory diagnostics: {e}")
 
-        if not self.model or not os.path.exists(audio_path):
+        if not self.model:
+            self._handle_chunk_failure(
+                session_dir=session_dir,
+                seq=seq,
+                audio_file=audio_path,
+                error_msg="Whisper model not initialized or unavailable",
+                rss_mb=rss_mb,
+                avail_ram_mb=avail_ram_mb,
+            )
             return
+
+        if not os.path.exists(audio_path):
+            self._handle_chunk_failure(
+                session_dir=session_dir,
+                seq=seq,
+                audio_file=audio_path,
+                error_msg=f"Audio file does not exist: {audio_path}",
+                rss_mb=rss_mb,
+                avail_ram_mb=avail_ram_mb,
+            )
+            return
+
 
         t0 = time.time()
         queue_wait_ms = (t0 - item["enqueued_at"]) * 1000
