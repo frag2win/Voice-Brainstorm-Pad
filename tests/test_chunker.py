@@ -328,8 +328,8 @@ def test_long_pause_cut_with_sufficient_speech(temp_session_dir):
 
     assert len(emitted) == 1, f"Expected exactly one chunk cut at pause, got {len(emitted)}"
     assert emitted[0].seq == 1
-    # Chunk should contain speech + pause cut (around 7.5s)
-    assert 7.0 <= emitted[0].duration_s <= 8.0
+    # Chunk contains 5.024s speech + edge_pad_s (0.2s padding) ~ 5.2s
+    assert 5.0 <= emitted[0].duration_s <= 5.5
 
 
 def test_long_pause_with_insufficient_speech_discards_as_noise(temp_session_dir):
@@ -358,4 +358,145 @@ def test_long_pause_with_insufficient_speech_discards_as_noise(temp_session_dir)
         emitted.append(final)
 
     assert len(emitted) == 0, f"Expected 0 chunks (discarded as noise), got {len(emitted)}"
+
+
+@pytest.mark.parametrize("P", [2.5, 3.0, 6.0])
+def test_edge_trimming_pause_cut_gap(temp_session_dir, P):
+    """
+    (a) 5 s speech + P s silence + 5 s speech:
+    for P in {2.5, 3, 6} the gap (next t_start - prev t_end) must equal P - 2*edge_pad_s within 0.05 s.
+    """
+    sample_rate = 16000
+    frame_size = 512
+    edge_pad_s = 0.2
+
+    speech1_frames = int(round(5.0 * sample_rate / frame_size))  # 156 frames (4.992s)
+    silence_frames = int(round(P * sample_rate / frame_size))
+    speech2_frames = int(round(5.0 * sample_rate / frame_size))
+
+    vad = ScriptedVAD(default_prob=0.0)
+    # Speech 1: frames 0..speech1_frames
+    vad.add_range(0, speech1_frames, 0.9)
+    # Speech 2: starts after silence_frames
+    s2_start = speech1_frames + silence_frames
+    s2_end = s2_start + speech2_frames
+    vad.add_range(s2_start, s2_end, 0.9)
+
+    config = ChunkerConfig(pause_cut_s=2.5, edge_pad_s=edge_pad_s)
+    chunker = AudioChunker(session_dir=temp_session_dir, config=config, vad_fn=vad)
+
+    emitted = []
+    total_frames = s2_end
+    for _ in range(total_frames):
+        chunk = chunker.process_frame(make_frame(amplitude=0.3))
+        if chunk:
+            emitted.append(chunk)
+
+    final = chunker.flush()
+    if final:
+        emitted.append(final)
+
+    assert len(emitted) == 2, f"Expected exactly 2 chunks, got {len(emitted)}"
+    chunk1, chunk2 = emitted[0], emitted[1]
+
+    gap = chunk2.t_start - chunk1.t_end
+    expected_gap = P - 2 * edge_pad_s
+    assert abs(gap - expected_gap) <= 0.05, f"For P={P}, expected gap {expected_gap:.3f}s, got {gap:.3f}s (diff={abs(gap-expected_gap):.3f}s)"
+
+
+def test_pause_of_2s_produces_no_pause_cut(temp_session_dir):
+    """
+    (b) P = 2.0 -> no pause cut.
+    5 s speech + 2.0 s silence:
+    Since 2.0s < pause_cut_s (2.5s), no pause cut occurs during the 2.0s pause.
+    """
+    sample_rate = 16000
+    frame_size = 512
+    speech1_frames = int(round(5.0 * sample_rate / frame_size))
+    silence_frames = int(round(2.0 * sample_rate / frame_size))
+
+    vad = ScriptedVAD(default_prob=0.0)
+    vad.add_range(0, speech1_frames, 0.9)
+
+    config = ChunkerConfig(pause_cut_s=2.5, target_chunk_s=8.0)
+    chunker = AudioChunker(session_dir=temp_session_dir, config=config, vad_fn=vad)
+
+    emitted = []
+    for _ in range(speech1_frames + silence_frames):
+        chunk = chunker.process_frame(make_frame(amplitude=0.3))
+        if chunk:
+            emitted.append(chunk)
+
+    # During the 2.0s pause, NO cut must have been emitted
+    assert len(emitted) == 0, f"Expected 0 chunks during 2.0s pause, got {len(emitted)}"
+
+
+def test_chunk_samples_equal_audio_wav_between_t_start_and_t_end(temp_session_dir):
+    """
+    (c) For every emitted chunk, the chunk WAV samples must equal the audio.wav samples
+    between t_start and t_end (byte-compare), so re-transcription offsets stay valid.
+    """
+    sample_rate = 16000
+    frame_size = 512
+    edge_pad_s = 0.2
+
+    # Deterministic distinct frames
+    speech1_frames = int(round(5.0 * sample_rate / frame_size))
+    silence_frames = int(round(3.0 * sample_rate / frame_size))
+    speech2_frames = int(round(5.0 * sample_rate / frame_size))
+    total_frames = speech1_frames + silence_frames + speech2_frames
+
+    all_frames = []
+    for i in range(total_frames):
+        frame = np.sin(np.linspace(i, i + 1, frame_size)).astype(np.float32) * 0.4
+        all_frames.append(frame)
+
+    vad = ScriptedVAD(default_prob=0.0)
+    vad.add_range(0, speech1_frames, 0.9)
+    s2_start = speech1_frames + silence_frames
+    s2_end = s2_start + speech2_frames
+    vad.add_range(s2_start, s2_end, 0.9)
+
+    config = ChunkerConfig(pause_cut_s=2.5, edge_pad_s=edge_pad_s)
+    chunker = AudioChunker(session_dir=temp_session_dir, config=config, vad_fn=vad)
+
+    from sidecar.recorder import LiveWavWriter
+    audio_wav_path = os.path.join(temp_session_dir, "audio.wav")
+    wav_writer = LiveWavWriter(audio_wav_path, sample_rate=sample_rate, channels=1)
+
+    emitted = []
+    for frame in all_frames:
+        wav_writer.write_samples(frame)
+        chunk = chunker.process_frame(frame)
+        if chunk:
+            emitted.append(chunk)
+
+    final = chunker.flush()
+    if final:
+        emitted.append(final)
+    wav_writer.close()
+
+    assert len(emitted) == 2, f"Expected 2 chunks, got {len(emitted)}"
+
+    # Read the full audio.wav PCM data (skipping 44-byte WAV header)
+    with open(audio_wav_path, "rb") as f:
+        audio_wav_bytes = f.read()[44:]
+
+    # For each chunk, byte-compare with audio.wav between t_start and t_end
+    for chunk in emitted:
+        chunk_wav_file = os.path.join(temp_session_dir, chunk.file_path)
+        with open(chunk_wav_file, "rb") as f:
+            chunk_wav_bytes = f.read()[44:]
+
+        start_byte = int(round(chunk.t_start * sample_rate)) * 2  # 16-bit = 2 bytes/sample
+        end_byte = int(round(chunk.t_end * sample_rate)) * 2
+        audio_slice = audio_wav_bytes[start_byte:end_byte]
+
+        assert len(chunk_wav_bytes) == len(audio_slice), (
+            f"Chunk #{chunk.seq} length ({len(chunk_wav_bytes)}) != audio.wav slice length ({len(audio_slice)})"
+        )
+        assert chunk_wav_bytes == audio_slice, (
+            f"Chunk #{chunk.seq} WAV samples do not byte-match audio.wav between t_start={chunk.t_start:.3f} and t_end={chunk.t_end:.3f}"
+        )
+
 
