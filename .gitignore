@@ -20,6 +20,7 @@ dist/
 # App user data & sessions
 sessions/
 *.wav
+bench/session_*/
 
 # OS artifacts
 Thumbs.db
