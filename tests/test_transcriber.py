@@ -135,7 +135,14 @@ def test_transcriber_appends_to_transcripts_jsonl(tmp_path, shared_transcriber):
         f.write(header)
         f.write(data_bytes)
 
-    shared_transcriber.enqueue(seq=1, audio_path=wav_file, duration_s=1.0, session_dir=str(tmp_path))
+    shared_transcriber.enqueue(
+        seq=1,
+        audio_path=wav_file,
+        duration_s=1.0,
+        session_dir=str(tmp_path),
+        t_start=12.5,
+        t_end=13.5,
+    )
     shared_transcriber.wait_drained(timeout=5.0)
 
     # Read transcripts.jsonl and verify metrics exist
@@ -145,6 +152,8 @@ def test_transcriber_appends_to_transcripts_jsonl(tmp_path, shared_transcriber):
 
     assert len(lines) == 1
     assert lines[0]["seq"] == 1
+    assert lines[0]["t_start"] == 12.5
+    assert lines[0]["t_end"] == 13.5
     assert "model" in lines[0]
     assert "rtf" in lines[0]
     assert "transcribe_s" in lines[0]

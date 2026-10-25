@@ -185,15 +185,15 @@ def test_drain_does_not_block_ping_pong():
                 def has_pending(self):
                     return self.pending_count > 0
 
-                def enqueue(self, seq, audio_path, duration_s, session_dir, **kwargs):
-                    self._queue.put_nowait((seq, audio_path, duration_s))
+                def enqueue(self, seq, audio_path, duration_s, session_dir, t_start=0.0, t_end=0.0, **kwargs):
+                    self._queue.put_nowait((seq, audio_path, duration_s, t_start, t_end))
                     if not self._task or self._task.done():
                         self._task = asyncio.create_task(self._worker())
 
                 async def _worker(self):
                     while not self._queue.empty():
                         self._busy = True
-                        seq, path, dur = await self._queue.get()
+                        seq, path, dur, t_start, t_end = await self._queue.get()
                         await asyncio.sleep(0.4)  # Slow chunk processing
                         from sidecar.transcriber import TranscriptionResult
                         res = TranscriptionResult(
@@ -207,6 +207,8 @@ def test_drain_does_not_block_ping_pong():
                             latency_ms=400.0,
                             queue_depth=self._queue.qsize(),
                             audio_file=path,
+                            t_start=t_start,
+                            t_end=t_end,
                         )
                         self.on_transcript(res)
                         self._busy = False
@@ -224,9 +226,9 @@ def test_drain_does_not_block_ping_pong():
                 await ws.recv()  # ready
                 await ws.recv()  # state
 
-                # Queue 3 chunks
+                # Queue 3 chunks with timeline offsets
                 for i in range(1, 4):
-                    fake.enqueue(i, f"dummy_{i}.wav", 2.0, "")
+                    fake.enqueue(i, f"dummy_{i}.wav", 2.0, "", t_start=(i - 1) * 2.0, t_end=i * 2.0)
 
                 # Send stop
                 await ws.send(json.dumps({"type": "stop", "version": 1}))
@@ -255,6 +257,13 @@ def test_drain_does_not_block_ping_pong():
                 assert pong_received, "Pong was not received during drain"
                 assert len(transcripts_received) == 3, f"Expected 3 transcripts, got {len(transcripts_received)}"
                 assert final_idle, "Final state was not idle"
+                # Verify timeline offsets in transcript message
+                assert transcripts_received[0]["t_start"] == 0.0
+                assert transcripts_received[0]["t_end"] == 2.0
+                assert transcripts_received[1]["t_start"] == 2.0
+                assert transcripts_received[1]["t_end"] == 4.0
+                assert transcripts_received[2]["t_start"] == 4.0
+                assert transcripts_received[2]["t_end"] == 6.0
 
     asyncio.run(_test())
 

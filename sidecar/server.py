@@ -406,6 +406,8 @@ class SidecarServer:
                                     audio_path=chunk.file_path,
                                     duration_s=chunk.duration_s,
                                     session_dir=session_folder,
+                                    t_start=chunk.t_start,
+                                    t_end=chunk.t_end,
                                 )
 
                     if self.recorder:
@@ -473,6 +475,8 @@ class SidecarServer:
                                     audio_path=final_chunk.file_path,
                                     duration_s=final_chunk.duration_s,
                                     session_dir=self.current_session_folder or "",
+                                    t_start=final_chunk.t_start,
+                                    t_end=final_chunk.t_end,
                                 )
                         self.chunker = None
 
@@ -549,6 +553,8 @@ class SidecarServer:
                         audio_path=final_chunk.file_path,
                         duration_s=final_chunk.duration_s,
                         session_dir=self.current_session_folder or "",
+                        t_start=final_chunk.t_start,
+                        t_end=final_chunk.t_end,
                     )
                 self.chunker = None
             self.state = "idle"
