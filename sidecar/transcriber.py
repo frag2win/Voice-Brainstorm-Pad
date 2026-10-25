@@ -84,15 +84,15 @@ def strip_prompt_echo(text: str, prompt: str) -> str:
     norm_p = [normalize_word(w) for w in p_words]
     norm_t = [normalize_word(w) for w in t_words]
 
-    # Look for longest matching tail of prompt at the start of text
+    # Look for longest matching tail of prompt at the start of text (>= 4 words required)
     max_k = min(len(norm_p), len(norm_t))
     best_match_k = 0
-    for k in range(max_k, 0, -1):
+    for k in range(max_k, 3, -1):
         if norm_p[-k:] == norm_t[:k]:
             best_match_k = k
             break
 
-    if best_match_k > 0:
+    if best_match_k >= 4:
         remaining_words = t_words[best_match_k:]
         return " ".join(remaining_words).strip()
 

@@ -171,19 +171,22 @@ def test_transcriber_appends_to_transcripts_jsonl(tmp_path, shared_transcriber):
 
 
 def test_strip_prompt_echo():
-    # 1. Output equals tail of prompt -> stripped completely
     prompt = "We are dictating notes for the local voice pad."
-    text = "local voice pad."
-    assert strip_prompt_echo(text, prompt) == ""
 
-    # 2. Output starts with tail of prompt -> repeated part stripped
-    text2 = "local voice pad. And continuing with a new idea."
-    assert strip_prompt_echo(text2, prompt) == "And continuing with a new idea."
+    # 1. Matches < 4 words: must remain unchanged
+    assert strip_prompt_echo("And then we ship it", "We must build this and") == "And then we ship it"
+    assert strip_prompt_echo("So yeah that works", "The plan looks good so") == "So yeah that works"
+    assert strip_prompt_echo("the cache is stale", "We must invalidate the") == "the cache is stale"
+    assert strip_prompt_echo("local voice pad.", prompt) == "local voice pad."
 
-    # 3. Output with punctuation/casing variations in prompt echo
-    prompt3 = "Hello, world! Today is great."
-    text3 = "today is great! More text."
-    assert strip_prompt_echo(text3, prompt3) == "More text."
+    # 2. Genuine 6-word echo: must be stripped
+    echo_prompt = "Before we launch, we need to test this thoroughly."
+    echo_text = "We need to test this thoroughly, and then deploy it."
+    assert strip_prompt_echo(echo_text, echo_prompt) == "and then deploy it."
+
+    # 3. Exactly equals >= 4 words of prompt tail -> stripped completely
+    full_echo = "we need to test this thoroughly."
+    assert strip_prompt_echo(full_echo, echo_prompt) == ""
 
     # 4. Output with no overlap -> unchanged
     text4 = "Completely distinct phrase."
