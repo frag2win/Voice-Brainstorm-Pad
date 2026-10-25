@@ -6,7 +6,7 @@
  *      * the anchor is at the start of the document (pos = 0)
  *      * the anchor is preceded by whitespace (space, tab, or newline)
  *      * the chunk text starts with punctuation that attaches directly (e.g. . , ! ? : ;)
- *  - After a pause longer than configured threshold (default 2.5s):
+ *  - After a pause longer than configured threshold (default 2.0s):
  *      * insert a paragraph break instead (\n\n, or \n if already preceded by \n)
  *      * unless at the very start of the document
  */
@@ -44,7 +44,7 @@ export function formatDictationText(
     return { insertText: "", hasLeadingBreak: false };
   }
 
-  const threshold = options.pauseThresholdS ?? 2.5;
+  const threshold = options.pauseThresholdS ?? 2.0;
   const safeAnchor = Math.max(0, Math.min(anchorPos, docText.length));
 
   // If at document start, no leading space or newline

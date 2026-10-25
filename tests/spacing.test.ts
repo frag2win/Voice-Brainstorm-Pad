@@ -29,6 +29,27 @@ describe("formatDictationText - Spacing & Formatting Rules", () => {
     expect(res.hasLeadingBreak).toBe(false);
   });
 
+  it("inserts a paragraph break when gap is 2.1s (exceeds default 2.0s threshold)", () => {
+    const doc = "First paragraph.";
+    const res = formatDictationText(doc, doc.length, "Second paragraph.", 2.1);
+    expect(res.insertText).toBe("\n\nSecond paragraph.");
+    expect(res.hasLeadingBreak).toBe(true);
+  });
+
+  it("does not insert a paragraph break when gap is 1.0s (below default 2.0s threshold)", () => {
+    const doc = "First paragraph.";
+    const res = formatDictationText(doc, doc.length, "Second paragraph.", 1.0);
+    expect(res.insertText).toBe(" Second paragraph.");
+    expect(res.hasLeadingBreak).toBe(false);
+  });
+
+  it("does not insert a paragraph break when gap is 0s", () => {
+    const doc = "First paragraph.";
+    const res = formatDictationText(doc, doc.length, "Second paragraph.", 0);
+    expect(res.insertText).toBe(" Second paragraph.");
+    expect(res.hasLeadingBreak).toBe(false);
+  });
+
   it("inserts a paragraph break after a pause longer than threshold (2.5s)", () => {
     const doc = "First paragraph.";
     const res = formatDictationText(doc, doc.length, "Second paragraph.", 3.0, { pauseThresholdS: 2.5 });
