@@ -257,3 +257,96 @@ def test_failed_chunk_appends_to_jsonl_and_emits_event(tmp_path):
     assert "rss_mb" in rec
     assert "avail_ram_mb" in rec
 
+
+def test_temperature_fallback_logging_on_segments(tmp_path, caplog):
+    """Verify that if segment.temperature > config.temperature[0], a WARNING is logged with chunk seq."""
+    from faster_whisper.transcribe import Segment
+
+    class MockModelWithSegments:
+        def __init__(self, segments):
+            self.segments = segments
+
+        def transcribe(self, *args, **kwargs):
+            return iter(self.segments), type("Info", (), {})()
+
+    # Create dummy wav
+    wav_file = str(tmp_path / "chunk_0042.wav")
+    sample_rate = 16000
+    pcm16 = np.zeros(sample_rate * 1, dtype=np.int16)
+    import struct
+    data_bytes = pcm16.tobytes()
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF", 36 + len(data_bytes), b"WAVE", b"fmt ",
+        16, 1, 1, sample_rate, sample_rate * 2, 2, 16,
+        b"data", len(data_bytes)
+    )
+    with open(wav_file, "wb") as f:
+        f.write(header)
+        f.write(data_bytes)
+
+    # 1. Segment with temperature fallback (0.2 > 0.0)
+    fallback_segment = Segment(
+        id=0,
+        seek=0,
+        start=0.0,
+        end=1.0,
+        text="Fallback segment text",
+        tokens=[1, 2],
+        avg_logprob=-0.5,
+        compression_ratio=1.2,
+        no_speech_prob=0.0,
+        words=None,
+        temperature=0.2,
+    )
+    config = TranscriberConfig(model_name="tiny.en", temperature=(0.0, 0.2, 0.4))
+    transcriber = Transcriber(
+        config=config,
+        auto_warmup=False,
+        model=MockModelWithSegments([fallback_segment]),
+    )
+
+    import logging
+    with caplog.at_level(logging.WARNING):
+        transcriber.enqueue(seq=42, audio_path=wav_file, duration_s=1.0, session_dir=str(tmp_path))
+        transcriber.wait_drained(timeout=5.0)
+
+    # Assert warning logged with chunk seq
+    warning_records = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING and "42" in r.message and "temperature fallback" in r.message
+    ]
+    assert len(warning_records) >= 1
+    transcriber.stop()
+
+    # 2. Segment with normal temperature (0.0 == 0.0) -> No warning
+    normal_segment = Segment(
+        id=0,
+        seek=0,
+        start=0.0,
+        end=1.0,
+        text="Normal segment text",
+        tokens=[1, 2],
+        avg_logprob=-0.2,
+        compression_ratio=1.1,
+        no_speech_prob=0.0,
+        words=None,
+        temperature=0.0,
+    )
+    caplog.clear()
+    transcriber2 = Transcriber(
+        config=config,
+        auto_warmup=False,
+        model=MockModelWithSegments([normal_segment]),
+    )
+    with caplog.at_level(logging.WARNING):
+        transcriber2.enqueue(seq=43, audio_path=wav_file, duration_s=1.0, session_dir=str(tmp_path))
+        transcriber2.wait_drained(timeout=5.0)
+
+    normal_warnings = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING and "temperature fallback" in r.message
+    ]
+    assert len(normal_warnings) == 0
+    transcriber2.stop()
+

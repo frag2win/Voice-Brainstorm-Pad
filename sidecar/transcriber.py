@@ -320,24 +320,17 @@ class Transcriber:
                 vad_filter=False,  # VAD already handled by Silero in chunker
             )
 
-            # Check if temperature fallback happened
-            used_temp = getattr(info, "temperature", None)
             initial_temp = (
                 self.config.temperature[0]
                 if isinstance(self.config.temperature, (tuple, list))
                 else self.config.temperature
             )
-            if used_temp is not None and used_temp > initial_temp:
-                logger.warning(
-                    f"Chunk #{seq}: temperature fallback occurred (used temperature {used_temp} > initial {initial_temp})"
-                )
 
             try:
                 for s in segments:
-                    seg_temp = getattr(s, "temperature", None)
-                    if seg_temp is not None and seg_temp > initial_temp and used_temp == initial_temp:
+                    if getattr(s, "temperature", None) is not None and s.temperature > initial_temp:
                         logger.warning(
-                            f"Chunk #{seq}: segment temperature fallback occurred (temperature {seg_temp} > initial {initial_temp})"
+                            f"Chunk #{seq}: temperature fallback occurred (temperature {s.temperature} > initial {initial_temp})"
                         )
                     # Keep segments unless confidence is overwhelmingly non-speech
                     if getattr(s, "no_speech_prob", 0.0) > 0.90 and getattr(s, "avg_logprob", 0.0) < -1.5:
