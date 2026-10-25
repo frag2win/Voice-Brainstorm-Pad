@@ -82,11 +82,20 @@ export function jumpToAnchor(view: EditorView): void {
 export function dictateTextTransaction(state: EditorState, insertText: string): TransactionSpec {
   const anchor = getDictationAnchor(state);
   const newAnchor = anchor + insertText.length;
-  return {
+  const mainSel = state.selection.main;
+  const isCursorAtAnchor = mainSel.empty && mainSel.head === anchor;
+
+  const spec: TransactionSpec = {
     changes: { from: anchor, insert: insertText },
     annotations: [Transaction.userEvent.of("input.dictation")],
     effects: [setAnchorEffect.of(newAnchor)],
   };
+
+  if (isCursorAtAnchor) {
+    spec.selection = EditorSelection.cursor(newAnchor);
+  }
+
+  return spec;
 }
 
 // ─── Visual Anchor Marker Decoration ──────────────────────────────────────────

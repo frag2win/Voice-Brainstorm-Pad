@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { EditorState, Transaction } from "@codemirror/state";
+import { EditorState, Transaction, EditorSelection } from "@codemirror/state";
 import {
   dictationAnchorField,
   setAnchorEffect,
@@ -164,5 +164,71 @@ describe("dictationAnchorField - CodeMirror State Field & Position Mapping", () 
       },
     });
     expect(undone).toBe(true);
+  });
+
+  it("caret at anchor moves to after dictated text, and typing one more word lands after it", () => {
+    const text = "Initial text";
+    let state = EditorState.create({
+      doc: text,
+      selection: EditorSelection.cursor(text.length),
+      extensions: [dictationAnchorField],
+    });
+    expect(state.selection.main.head).toBe(text.length);
+
+    // Dictate " more speech"
+    const dictated = " more speech";
+    const tr = state.update(dictateTextTransaction(state, dictated));
+    state = tr.state;
+
+    // Caret must have followed to the end of inserted text
+    expect(state.selection.main.empty).toBe(true);
+    expect(state.selection.main.head).toBe(text.length + dictated.length);
+    expect(getDictationAnchor(state)).toBe(text.length + dictated.length);
+
+    // Typing one more word lands after it
+    const typedWord = " typed";
+    const tr2 = state.update({
+      changes: { from: state.selection.main.head, insert: typedWord },
+      selection: EditorSelection.cursor(state.selection.main.head + typedWord.length),
+    });
+    state = tr2.state;
+    expect(state.doc.toString()).toBe("Initial text more speech typed");
+  });
+
+  it("caret elsewhere (position 0) remains unchanged and mapped correctly", () => {
+    const text = "Initial text";
+    let state = EditorState.create({
+      doc: text,
+      selection: EditorSelection.cursor(0),
+      extensions: [dictationAnchorField],
+    });
+    expect(getDictationAnchor(state)).toBe(12);
+
+    const tr = state.update(dictateTextTransaction(state, " appended"));
+    state = tr.state;
+
+    // Caret at pos 0 must remain at pos 0
+    expect(state.selection.main.empty).toBe(true);
+    expect(state.selection.main.head).toBe(0);
+    expect(state.doc.toString()).toBe("Initial text appended");
+  });
+
+  it("non-empty selection range is preserved and mapped correctly", () => {
+    const text = "Selected text here";
+    let state = EditorState.create({
+      doc: text,
+      selection: EditorSelection.range(0, 8),
+      extensions: [dictationAnchorField],
+    });
+    expect(state.selection.main.empty).toBe(false);
+
+    const tr = state.update(dictateTextTransaction(state, " more"));
+    state = tr.state;
+
+    // Selection range must still be 0 to 8
+    expect(state.selection.main.empty).toBe(false);
+    expect(state.selection.main.from).toBe(0);
+    expect(state.selection.main.to).toBe(8);
+    expect(state.sliceDoc(state.selection.main.from, state.selection.main.to)).toBe("Selected");
   });
 });
