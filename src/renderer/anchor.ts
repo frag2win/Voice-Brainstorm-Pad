@@ -106,7 +106,6 @@ class AnchorMarkerWidget extends WidgetType {
     span.className = "cm-dictation-anchor";
     span.setAttribute("aria-hidden", "true");
     span.title = "Dictation anchor: speech inserts here";
-    span.textContent = "⚓";
     return span;
   }
 
