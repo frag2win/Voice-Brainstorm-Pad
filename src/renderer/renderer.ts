@@ -16,6 +16,15 @@ import { defaultKeymap, history, historyKeymap, undo, redo, undoDepth } from "@c
 import { search, searchKeymap, openSearchPanel } from "@codemirror/search";
 import { markdown } from "@codemirror/lang-markdown";
 import { indentOnInput, syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
+import {
+  dictationAnchorField,
+  dictationAnchorDecoration,
+  getDictationAnchor,
+  moveAnchorToCaret,
+  jumpToAnchor,
+  dictateTextTransaction,
+} from "./anchor";
+import { formatDictationText } from "./spacing";
 
 interface SidecarStatus {
   state: string;
@@ -100,6 +109,8 @@ const elDictateLabel  = document.getElementById("dictate-label")!;
 const elDictateIcon   = document.getElementById("dictate-icon")!;
 const elLevelBar      = document.getElementById("level-meter-bar")!;
 const elMicSelect     = document.getElementById("mic-select") as HTMLSelectElement;
+const elBtnMoveAnchor = document.getElementById("btn-move-anchor") as HTMLButtonElement | null;
+const elBtnJumpAnchor = document.getElementById("btn-jump-anchor") as HTMLButtonElement | null;
 
 // ─── CodeMirror setup ─────────────────────────────────────────────────────────
 
@@ -109,6 +120,9 @@ function buildEditorState(text: string): EditorState {
     extensions: [
       // History (undo/redo)
       history(),
+      // Dictation Anchor (Iteration 5)
+      dictationAnchorField,
+      dictationAnchorDecoration,
       // Gutter with line numbers
       lineNumbers(),
       highlightActiveLineGutter(),
@@ -129,6 +143,20 @@ function buildEditorState(text: string): EditorState {
       search({ top: false }),
       // All keybindings
       keymap.of([
+        {
+          key: "Mod-Alt-a",
+          run: (v) => {
+            moveAnchorToCaret(v);
+            return true;
+          },
+        },
+        {
+          key: "Mod-Alt-j",
+          run: (v) => {
+            jumpToAnchor(v);
+            return true;
+          },
+        },
         ...defaultKeymap,
         ...historyKeymap,
         ...searchKeymap,
@@ -321,6 +349,8 @@ function showEditor(payload: SessionPayload): void {
     currentSidecarState !== "connecting" &&
     currentSidecarState !== "reconnecting";
   elBtnDictate.disabled = !isAvailable;
+  if (elBtnMoveAnchor) elBtnMoveAnchor.disabled = false;
+  if (elBtnJumpAnchor) elBtnJumpAnchor.disabled = false;
 
   mountEditor(payload.text);
   updateWordCount(payload.text);
@@ -338,6 +368,8 @@ function hideEditor(): void {
   elSessionTitle.value = "";
   elWordCount.textContent = "0 words";
   elBtnDictate.disabled = true;
+  if (elBtnMoveAnchor) elBtnMoveAnchor.disabled = true;
+  if (elBtnJumpAnchor) elBtnJumpAnchor.disabled = true;
   elBtnDictate.classList.remove("listening");
   elDictateLabel.textContent = "Dictate";
   elDictateIcon.textContent = "🎙️";
@@ -529,8 +561,23 @@ async function init(): Promise<void> {
     if (currentSidecarState === "listening") {
       await window.vbp.sidecar.stopListening();
     } else if (currentSessionFolder) {
+      lastChunkEndTime = null;
       const deviceId = elMicSelect.value || undefined;
       await window.vbp.sidecar.startListening(currentSessionFolder, deviceId);
+    }
+  });
+
+  // Wire Dictation Anchor Controls (Iteration 5 - FR-6)
+  elBtnMoveAnchor?.addEventListener("click", () => {
+    if (editorView) {
+      moveAnchorToCaret(editorView);
+      editorView.focus();
+    }
+  });
+
+  elBtnJumpAnchor?.addEventListener("click", () => {
+    if (editorView) {
+      jumpToAnchor(editorView);
     }
   });
 
@@ -552,9 +599,29 @@ async function init(): Promise<void> {
     console.log(`[Chunker] Emitted chunk #${chunk.seq} (${chunk.duration_s}s) -> ${chunk.audio_file}`);
   });
 
-  // Wire Transcript Events (Iteration 4 - output to log)
+  // Wire Transcript Events (Iteration 5 - Streaming Editor Insertion at Dictation Anchor)
+  let lastChunkEndTime: number | null = null;
+
   window.vbp.sidecar.onTranscript((data: any) => {
     console.log(`[Transcriber] #${data.seq} (${data.rtf}x RTF, ${data.words}w): "${data.text}"`);
+    if (!editorView || !data.text || !data.text.trim()) return;
+
+    const now = Date.now();
+    let pauseDurationS = 0;
+    if (lastChunkEndTime !== null) {
+      pauseDurationS = Math.max(0, (now - lastChunkEndTime) / 1000 - (data.duration_s || 0));
+    }
+    lastChunkEndTime = now;
+
+    const docText = editorView.state.doc.toString();
+    const anchor = getDictationAnchor(editorView.state);
+    const formatted = formatDictationText(docText, anchor, data.text, pauseDurationS);
+
+    if (formatted.insertText) {
+      const trSpec = dictateTextTransaction(editorView.state, formatted.insertText);
+      trSpec.scrollIntoView = true;
+      editorView.dispatch(trSpec);
+    }
   });
 
   // Initialize sidecar status tracking
