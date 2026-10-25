@@ -53,7 +53,12 @@ class AudioChunk:
 
 
 class AudioChunker:
-    def __init__(self, session_dir: str, config: Optional[ChunkerConfig] = None):
+    def __init__(
+        self,
+        session_dir: str,
+        config: Optional[ChunkerConfig] = None,
+        vad_fn: Optional[Any] = None,
+    ):
         self.session_dir = session_dir
         self.config = config or ChunkerConfig()
         self.chunks_dir = os.path.join(session_dir, "chunks")
@@ -73,21 +78,16 @@ class AudioChunker:
             except Exception:
                 pass
 
-        # Resume sample offset from audio.wav (Defect 2 fix: authoritative audio sample count)
+        # Resume sample offset from audio.wav: always byte size calculation, never wave.getnframes()
         self._total_samples_emitted = 0
         audio_wav_path = os.path.join(session_dir, "audio.wav")
         if os.path.exists(audio_wav_path):
-            try:
-                import wave
-                with wave.open(audio_wav_path, "rb") as wf:
-                    self._total_samples_emitted = wf.getnframes()
-            except Exception:
-                size = os.path.getsize(audio_wav_path)
-                self._total_samples_emitted = max(0, (size - 44) // 2)
+            size = os.path.getsize(audio_wav_path)
+            self._total_samples_emitted = max(0, (size - 44) // 2)
 
-        # Load Silero VAD model if available
-        self._vad = None
-        if get_vad_model is not None:
+        # Load Silero VAD model or use injected vad_fn
+        self._vad = vad_fn
+        if self._vad is None and get_vad_model is not None:
             try:
                 self._vad = get_vad_model()
             except Exception:
@@ -95,24 +95,22 @@ class AudioChunker:
 
         # Internal state
         self._buffer: List[np.ndarray] = []
+        self._buffer_is_speech: List[bool] = []
         self._current_chunk_samples = 0
         self._silence_samples = 0
         self._has_speech = False
 
     def _is_speech(self, frame: np.ndarray) -> bool:
         """Evaluate whether a 512-sample frame contains speech."""
-        rms = float(np.sqrt(np.mean(frame ** 2)))
-        if rms < self.config.energy_threshold:
-            return False
-
-        # If Silero VAD is loaded, run neural model (pure neural check, no loud-click override)
         if self._vad is not None:
             try:
-                prob = float(self._vad(frame)[0])
+                res = self._vad(frame)
+                prob = float(res[0]) if hasattr(res, "__getitem__") else float(res)
                 return prob >= self.config.vad_threshold
             except Exception:
                 pass
 
+        rms = float(np.sqrt(np.mean(frame ** 2)))
         return rms >= self.config.energy_threshold
 
     def process_frame(self, frame: np.ndarray) -> Optional[AudioChunk]:
@@ -125,6 +123,7 @@ class AudioChunker:
 
         is_speech = self._is_speech(frame)
         self._buffer.append(frame)
+        self._buffer_is_speech.append(is_speech)
         self._current_chunk_samples += len(frame)
 
         if is_speech:
@@ -171,19 +170,30 @@ class AudioChunker:
         cut_point = len(self._buffer) - window_size + min_idx + 1
 
         chunk_frames = self._buffer[:cut_point]
+        chunk_flags = self._buffer_is_speech[:cut_point]
         remainder_frames = self._buffer[cut_point:]
+        remainder_flags = self._buffer_is_speech[cut_point:]
 
-        return self._emit_frames(chunk_frames, remainder_frames)
+        return self._emit_frames(chunk_frames, remainder_frames, chunk_flags, remainder_flags)
 
     def _emit_chunk(self) -> Optional[AudioChunk]:
         """Finalize and save all currently buffered audio as a chunk."""
         frames = self._buffer
+        flags = self._buffer_is_speech
         self._buffer = []
-        return self._emit_frames(frames, remainder_frames=[])
+        self._buffer_is_speech = []
+        return self._emit_frames(frames, remainder_frames=[], chunk_flags=flags, remainder_flags=[])
 
-    def _emit_frames(self, chunk_frames: List[np.ndarray], remainder_frames: List[np.ndarray]) -> Optional[AudioChunk]:
+    def _emit_frames(
+        self,
+        chunk_frames: List[np.ndarray],
+        remainder_frames: List[np.ndarray],
+        chunk_flags: List[bool],
+        remainder_flags: List[bool],
+    ) -> Optional[AudioChunk]:
         if not chunk_frames:
             self._buffer = remainder_frames
+            self._buffer_is_speech = remainder_flags
             return None
 
         samples = np.concatenate(chunk_frames)
@@ -193,15 +203,26 @@ class AudioChunker:
 
         # Reset buffer to the remainder
         self._buffer = remainder_frames
+        self._buffer_is_speech = remainder_flags
         self._current_chunk_samples = sum(len(f) for f in remainder_frames)
-        self._silence_samples = 0
+
+        # Compute silence_samples for the carried-over remainder from flags
+        trailing_silence_frames = 0
+        for flag in reversed(remainder_flags):
+            if not flag:
+                trailing_silence_frames += 1
+            else:
+                break
+        self._silence_samples = trailing_silence_frames * self.config.frame_size
+
+        chunk_has_speech = any(chunk_flags) if chunk_flags else self._has_speech
+        # Compute _has_speech directly from the remainder frames' cached flags
+        self._has_speech = any(remainder_flags) if remainder_flags else False
 
         # Discard pure non-speech chunks (TRD 2.3)
-        if not self._has_speech:
+        if not chunk_has_speech:
             self._total_samples_emitted += len(samples)
             return None
-
-        self._has_speech = any(self._is_speech(f) for f in remainder_frames) if remainder_frames else False
         self.sequence_num += 1
         seq = self.sequence_num
 
