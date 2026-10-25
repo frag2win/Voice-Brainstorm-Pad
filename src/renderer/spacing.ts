@@ -22,6 +22,16 @@ export interface FormatResult {
 
 const ATTACHING_PUNCTUATION = new Set([".", ",", "!", "?", ":", ";", ")", "]", "}", "…"]);
 
+export function calculateAudioPauseDuration(
+  tStart?: number,
+  lastChunkEnd?: number | null
+): number {
+  if (lastChunkEnd === null || lastChunkEnd === undefined || tStart === undefined) {
+    return 0;
+  }
+  return Math.max(0, tStart - lastChunkEnd);
+}
+
 export function formatDictationText(
   docText: string,
   anchorPos: number,

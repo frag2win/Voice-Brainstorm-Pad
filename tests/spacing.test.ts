@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatDictationText } from "../src/renderer/spacing";
+import { formatDictationText, calculateAudioPauseDuration } from "../src/renderer/spacing";
 
 describe("formatDictationText - Spacing & Formatting Rules", () => {
   it("does not prepend leading space at the start of an empty document", () => {
@@ -69,5 +69,41 @@ describe("formatDictationText - Spacing & Formatting Rules", () => {
 
     const res2 = formatDictationText(doc, doc.length, "   ");
     expect(res2.insertText).toBe("");
+  });
+
+  it("produces a paragraph break when transcripts arrive late in a backlog but audio gap is 3.0s", () => {
+    // Simulated catch-up backlog: Chunk 1 ended at 10.0s, Chunk 2 starts at 13.0s (3s pause in speech)
+    const lastChunkEnd = 10.0;
+    const chunk2 = {
+      t_start: 13.0,
+      t_end: 17.5,
+      text: "New paragraph after backlog.",
+    };
+
+    const pauseDurationS = calculateAudioPauseDuration(chunk2.t_start, lastChunkEnd);
+    expect(pauseDurationS).toBe(3.0);
+
+    const doc = "Previous chunk audio ended at ten seconds.";
+    const res = formatDictationText(doc, doc.length, chunk2.text, pauseDurationS);
+    expect(res.insertText).toBe("\n\nNew paragraph after backlog.");
+    expect(res.hasLeadingBreak).toBe(true);
+  });
+
+  it("does not produce a paragraph break when audio gap is 0.1s even if arrived back-to-back", () => {
+    // Continuous speech: Chunk 1 ended at 10.0s, Chunk 2 starts at 10.1s (0.1s gap)
+    const lastChunkEnd = 10.0;
+    const chunk2 = {
+      t_start: 10.1,
+      t_end: 14.5,
+      text: "continuing the same thought smoothly.",
+    };
+
+    const pauseDurationS = calculateAudioPauseDuration(chunk2.t_start, lastChunkEnd);
+    expect(pauseDurationS).toBeCloseTo(0.1);
+
+    const doc = "First sentence";
+    const res = formatDictationText(doc, doc.length, chunk2.text, pauseDurationS);
+    expect(res.insertText).toBe(" continuing the same thought smoothly.");
+    expect(res.hasLeadingBreak).toBe(false);
   });
 });

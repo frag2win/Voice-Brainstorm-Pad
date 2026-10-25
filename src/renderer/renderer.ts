@@ -84,6 +84,7 @@ let sessions: SessionMeta[] = [];
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let titleTimer: ReturnType<typeof setTimeout> | null = null;
 let isDirty = false;
+let lastChunkEnd: number | null = null;
 
 const AUTOSAVE_DELAY_MS = 800; // save ≤ 1 s after last keystroke
 
@@ -337,6 +338,7 @@ async function handleDeleteSession(slug: string): Promise<void> {
 // ─── Editor visibility ────────────────────────────────────────────────────────
 
 function showEditor(payload: SessionPayload): void {
+  lastChunkEnd = null;
   currentSessionFolder = payload.folderPath;
   elEmptyState.style.display = "none";
   elEditorMount.style.display = "block";
@@ -358,6 +360,7 @@ function showEditor(payload: SessionPayload): void {
 }
 
 function hideEditor(): void {
+  lastChunkEnd = null;
   if (currentSidecarState === "listening") {
     window.vbp.sidecar.stopListening().catch(() => {});
   }
@@ -561,7 +564,7 @@ async function init(): Promise<void> {
     if (currentSidecarState === "listening") {
       await window.vbp.sidecar.stopListening();
     } else if (currentSessionFolder) {
-      lastChunkEndTime = null;
+      lastChunkEnd = null;
       const deviceId = elMicSelect.value || undefined;
       await window.vbp.sidecar.startListening(currentSessionFolder, deviceId);
     }
@@ -600,18 +603,17 @@ async function init(): Promise<void> {
   });
 
   // Wire Transcript Events (Iteration 5 - Streaming Editor Insertion at Dictation Anchor)
-  let lastChunkEndTime: number | null = null;
-
   window.vbp.sidecar.onTranscript((data: any) => {
     console.log(`[Transcriber] #${data.seq} (${data.rtf}x RTF, ${data.words}w): "${data.text}"`);
     if (!editorView || !data.text || !data.text.trim()) return;
 
-    const now = Date.now();
     let pauseDurationS = 0;
-    if (lastChunkEndTime !== null) {
-      pauseDurationS = Math.max(0, (now - lastChunkEndTime) / 1000 - (data.duration_s || 0));
+    if (lastChunkEnd !== null && typeof data.t_start === "number") {
+      pauseDurationS = Math.max(0, data.t_start - lastChunkEnd);
     }
-    lastChunkEndTime = now;
+    lastChunkEnd = typeof data.t_end === "number"
+      ? data.t_end
+      : (typeof data.t_start === "number" ? data.t_start : 0) + (data.duration_s || 0);
 
     const docText = editorView.state.doc.toString();
     const anchor = getDictationAnchor(editorView.state);
@@ -647,6 +649,9 @@ async function init(): Promise<void> {
     }
 
     window.vbp.sidecar.onStateChange((state) => {
+      if (state === "listening") {
+        lastChunkEnd = null;
+      }
       updateSidecarStatus(state);
     });
   } catch (err) {
