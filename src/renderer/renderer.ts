@@ -114,6 +114,25 @@ const elMicSelect     = document.getElementById("mic-select") as HTMLSelectEleme
 const elBtnMoveAnchor = document.getElementById("btn-move-anchor") as HTMLButtonElement | null;
 const elBtnJumpAnchor = document.getElementById("btn-jump-anchor") as HTMLButtonElement | null;
 
+// New Brutalist & Glassmorphic UI refs
+const elSidebar           = document.getElementById("sidebar") as HTMLElement | null;
+const elBtnSidebarToggle  = document.getElementById("btn-sidebar-toggle") as HTMLButtonElement | null;
+const elBtnSearchToggle   = document.getElementById("btn-search-toggle") as HTMLButtonElement | null;
+const elSidebarSearchBox  = document.getElementById("sidebar-search-box") as HTMLElement | null;
+const elInputSearch       = document.getElementById("input-search-sessions") as HTMLInputElement | null;
+const elBtnThemeToggle    = document.getElementById("btn-theme-toggle") as HTMLButtonElement | null;
+const elThemeSun          = document.getElementById("theme-icon-sun") as HTMLElement | null;
+const elThemeMoon         = document.getElementById("theme-icon-moon") as HTMLElement | null;
+const elBreadcrumbSlug    = document.getElementById("breadcrumb-slug") as HTMLElement | null;
+const elDockWaveform      = document.getElementById("dock-waveform") as HTMLElement | null;
+const elDockStatusDot     = document.getElementById("dock-status-dot") as HTMLElement | null;
+const elDockModelTitle    = document.getElementById("dock-model-title") as HTMLElement | null;
+const elDockSubStatus     = document.getElementById("dock-sub-status") as HTMLElement | null;
+const elSpeculativeBox    = document.getElementById("speculative-anchor-box") as HTMLElement | null;
+const elSpeculativeText   = document.getElementById("speculative-text") as HTMLElement | null;
+
+let searchQuery = "";
+
 // ─── CodeMirror setup ─────────────────────────────────────────────────────────
 
 function buildEditorState(text: string): EditorState {
@@ -231,14 +250,22 @@ function setAutosaveState(state: "saving" | "saved" | ""): void {
 
 function renderSessionList(): void {
   elSessionList.innerHTML = "";
-  if (sessions.length === 0) {
+  const filtered = searchQuery
+    ? sessions.filter(
+        (s) =>
+          s.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          s.slug.toLowerCase().includes(searchQuery.toLowerCase())
+      )
+    : sessions;
+
+  if (filtered.length === 0) {
     const li = document.createElement("li");
-    li.textContent = "No sessions yet";
-    li.style.cssText = "padding:12px 14px;color:var(--text-muted);font-size:12px;";
+    li.textContent = searchQuery ? "No matching sessions" : "No sessions yet";
+    li.style.cssText = "padding:12px 14px;color:var(--text-muted);font-size:11px;font-family:var(--font-mono);";
     elSessionList.appendChild(li);
     return;
   }
-  for (const meta of sessions) {
+  for (const meta of filtered) {
     elSessionList.appendChild(buildSessionItem(meta));
   }
 }
@@ -346,6 +373,10 @@ function showEditor(payload: SessionPayload): void {
   elSessionTitle.disabled = false;
   elSessionTitle.value = payload.meta.title;
 
+  if (elBreadcrumbSlug) {
+    elBreadcrumbSlug.textContent = `${payload.meta.slug}.MD`.toUpperCase();
+  }
+
   const isAvailable =
     currentSidecarState !== "disconnected" &&
     currentSidecarState !== "error" &&
@@ -374,11 +405,17 @@ function hideEditor(): void {
   elBtnDictate.disabled = true;
   if (elBtnMoveAnchor) elBtnMoveAnchor.disabled = true;
   if (elBtnJumpAnchor) elBtnJumpAnchor.disabled = true;
-  elBtnDictate.classList.remove("listening");
-  elDictateLabel.textContent = "Dictate";
-  elDictateIcon.textContent = "🎙️";
+  elBtnDictate.classList.remove("listening", "catching-up");
+  elDictateLabel.textContent = "INIT_DICTATION";
   elLevelBar.style.width = "0%";
   setAutosaveState("");
+
+  if (elBreadcrumbSlug) {
+    elBreadcrumbSlug.textContent = "UNTITLED.MD";
+  }
+  if (elSpeculativeBox) {
+    elSpeculativeBox.style.display = "none";
+  }
 
   if (editorView) {
     editorView.destroy();
@@ -479,54 +516,91 @@ function formatRelative(iso: string): string {
 
 function updateSidecarStatus(state: string, model?: string): void {
   currentSidecarState = state;
-  if (!elSidecarPill || !elSidecarText) return;
-  elSidecarPill.className = `pill pill-${state}`;
-  let label = "Connecting…";
-  let tooltip = "Speech engine connection status";
+  const currentModel = model || "small.en";
 
-  switch (state) {
-    case "ready":
-    case "idle":
-      label = "Sidecar ready";
-      tooltip = `Speech sidecar connected and idle (${model || "small.en"})`;
-      break;
-    case "listening":
-      label = "Listening…";
-      tooltip = "Speech sidecar is recording and chunking audio";
-      break;
-    case "connecting":
-      label = "Connecting…";
-      tooltip = "Starting speech sidecar…";
-      break;
-    case "reconnecting":
-      label = "Reconnecting…";
-      tooltip = "Speech sidecar restarted, reconnecting…";
-      break;
-    case "disconnected":
-      label = "Sidecar offline";
-      tooltip = "Speech sidecar is offline (typing & editor remain fully functional)";
-      break;
-    case "error":
-      label = "Sidecar error";
-      tooltip = "Speech sidecar error";
-      break;
-    default:
-      label = state;
-      tooltip = `Sidecar state: ${state}`;
+  if (elSidecarPill && elSidecarText) {
+    elSidecarPill.className = `pill pill-${state}`;
+    let label = "Connecting…";
+    let tooltip = "Speech engine connection status";
+
+    switch (state) {
+      case "ready":
+      case "idle":
+        label = "Sidecar ready";
+        tooltip = `Speech sidecar connected and idle (${currentModel})`;
+        break;
+      case "listening":
+        label = "Listening…";
+        tooltip = "Speech sidecar is recording and chunking audio";
+        break;
+      case "connecting":
+        label = "Connecting…";
+        tooltip = "Starting speech sidecar…";
+        break;
+      case "reconnecting":
+        label = "Reconnecting…";
+        tooltip = "Speech sidecar restarted, reconnecting…";
+        break;
+      case "disconnected":
+        label = "Sidecar offline";
+        tooltip = "Speech sidecar is offline (typing & editor remain fully functional)";
+        break;
+      case "error":
+        label = "Sidecar error";
+        tooltip = "Speech sidecar error";
+        break;
+      default:
+        label = state;
+        tooltip = `Sidecar state: ${state}`;
+    }
+    elSidecarText.textContent = label;
+    elSidecarPill.title = tooltip;
   }
-
-  elSidecarText.textContent = label;
-  elSidecarPill.title = tooltip;
 
   if (state === "listening") {
     elBtnDictate.classList.add("listening");
-    elDictateLabel.textContent = "Stop";
-    elDictateIcon.textContent = "⏹";
-  } else {
+    elBtnDictate.classList.remove("catching-up");
+    elDictateLabel.textContent = "STOP_DICTATION";
+    elDictateIcon.innerHTML = `<svg class="dock-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" ry="1"/></svg>`;
+
+    if (elDockWaveform) elDockWaveform.style.display = "flex";
+    if (elDockStatusDot) elDockStatusDot.style.display = "none";
+    if (elDockModelTitle) elDockModelTitle.textContent = "LISTENING...";
+    if (elDockSubStatus) elDockSubStatus.textContent = "LIVE CAPTURE | ACTIVE";
+    if (elSpeculativeBox) elSpeculativeBox.style.display = "block";
+  } else if (state === "catching_up") {
     elBtnDictate.classList.remove("listening");
-    elDictateLabel.textContent = "Dictate";
-    elDictateIcon.textContent = "🎙️";
+    elBtnDictate.classList.add("catching-up");
+    elDictateLabel.textContent = "CATCHING_UP";
+    elDictateIcon.innerHTML = `<svg class="dock-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="5"/></svg>`;
+
+    if (elDockWaveform) elDockWaveform.style.display = "none";
+    if (elDockStatusDot) {
+      elDockStatusDot.style.display = "block";
+      elDockStatusDot.className = "dock-status-dot dot-connecting";
+    }
+    if (elDockModelTitle) elDockModelTitle.textContent = "CATCHING UP...";
+    if (elDockSubStatus) elDockSubStatus.textContent = "DRAINING QUEUED CHUNKS";
+    if (elSpeculativeBox) elSpeculativeBox.style.display = "none";
+  } else {
+    elBtnDictate.classList.remove("listening", "catching-up");
+    elDictateLabel.textContent = "INIT_DICTATION";
+    elDictateIcon.innerHTML = `<svg class="dock-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/></svg>`;
     elLevelBar.style.width = "0%";
+
+    if (elDockWaveform) elDockWaveform.style.display = "none";
+    if (elDockStatusDot) {
+      elDockStatusDot.style.display = "block";
+      elDockStatusDot.className =
+        state === "ready" || state === "idle"
+          ? "dock-status-dot dot-ready"
+          : state === "error" || state === "disconnected"
+          ? "dock-status-dot dot-error"
+          : "dock-status-dot dot-connecting";
+    }
+    if (elDockModelTitle) elDockModelTitle.textContent = `MODEL: ${currentModel}`;
+    if (elDockSubStatus) elDockSubStatus.textContent = "TARGET: CPU | IPC: LOCAL";
+    if (elSpeculativeBox) elSpeculativeBox.style.display = "none";
   }
 
   const isAvailable =
@@ -581,6 +655,56 @@ export function showChunkFailedNotice(seq: number): void {
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 async function init(): Promise<void> {
+  // Theme Management
+  const applyTheme = (isLight: boolean) => {
+    if (isLight) {
+      document.body.classList.add("theme-light");
+      if (elThemeSun) elThemeSun.style.display = "none";
+      if (elThemeMoon) elThemeMoon.style.display = "block";
+    } else {
+      document.body.classList.remove("theme-light");
+      if (elThemeSun) elThemeSun.style.display = "block";
+      if (elThemeMoon) elThemeMoon.style.display = "none";
+    }
+    localStorage.setItem("vbp-theme", isLight ? "light" : "dark");
+  };
+
+  const savedTheme = localStorage.getItem("vbp-theme");
+  applyTheme(savedTheme === "light");
+
+  elBtnThemeToggle?.addEventListener("click", () => {
+    const isCurrentlyLight = document.body.classList.contains("theme-light");
+    applyTheme(!isCurrentlyLight);
+  });
+
+  // Collapsible Sidebar Rail
+  elBtnSidebarToggle?.addEventListener("click", () => {
+    elSidebar?.classList.toggle("collapsed");
+  });
+
+  // Search Toggle and Filter
+  elBtnSearchToggle?.addEventListener("click", () => {
+    if (elSidebar?.classList.contains("collapsed")) {
+      elSidebar.classList.remove("collapsed");
+    }
+    if (elSidebarSearchBox) {
+      const isVisible = elSidebarSearchBox.style.display !== "none";
+      elSidebarSearchBox.style.display = isVisible ? "none" : "block";
+      if (!isVisible) {
+        elInputSearch?.focus();
+      } else {
+        searchQuery = "";
+        if (elInputSearch) elInputSearch.value = "";
+        renderSessionList();
+      }
+    }
+  });
+
+  elInputSearch?.addEventListener("input", () => {
+    searchQuery = elInputSearch.value.trim();
+    renderSessionList();
+  });
+
   // Populate sessions root path in footer
   const rootPath = await window.vbp.sessions.rootPath();
   elRootLabel.textContent = rootPath;
@@ -616,11 +740,21 @@ async function init(): Promise<void> {
     await window.vbp.sidecar.setDevice(elMicSelect.value);
   });
 
-  // Wire Live Audio Level Meter
+  // Wire Live Audio Level Meter & Waveform Visualizer
   window.vbp.sidecar.onLevel((rms: number) => {
     if (currentSidecarState === "listening") {
       const pct = Math.min(100, Math.max(0, Math.round(Math.sqrt(rms) * 180)));
       elLevelBar.style.width = `${pct}%`;
+
+      const bars = document.querySelectorAll<HTMLElement>(".wave-bar");
+      if (bars.length > 0) {
+        const scale = Math.min(1.0, Math.max(0.2, Math.sqrt(rms) * 3.0));
+        bars.forEach((bar, idx) => {
+          const heights = [8, 18, 14, 22, 12];
+          const h = Math.round(scale * (heights[idx] || 14));
+          bar.style.height = `${Math.max(4, h)}px`;
+        });
+      }
     }
   });
 
@@ -633,6 +767,10 @@ async function init(): Promise<void> {
   window.vbp.sidecar.onTranscript((data: any) => {
     console.log(`[Transcriber] #${data.seq} (${data.rtf}x RTF, ${data.words}w): "${data.text}"`);
     if (!editorView || !data.text || !data.text.trim()) return;
+
+    if (elSpeculativeText && data.text) {
+      elSpeculativeText.textContent = `...${data.text.trim()}`;
+    }
 
     let pauseDurationS = 0;
     if (lastChunkEnd !== null && typeof data.t_start === "number") {

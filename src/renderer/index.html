@@ -8,44 +8,73 @@
   <title>Voice Brainstorm Pad</title>
   <link rel="stylesheet" href="style.css" />
 </head>
-<body>
-  <!-- ── Sidebar ───────────────────────────────────────────────────────── -->
-  <aside id="sidebar" aria-label="Session list">
-    <div id="sidebar-header">
-      <h1 id="app-name">🎙 Brainstorm Pad</h1>
-      <button id="btn-new-session" title="New session (Ctrl+N)" aria-label="New session">
-        <span aria-hidden="true">＋</span> New
+<body class="theme-dark">
+  <!-- ── Collapsible Sidebar Rail (72px collapsed / 260px expanded) ────────── -->
+  <aside id="sidebar" class="sidebar-rail collapsed" aria-label="Navigation & Sessions">
+    <!-- Top Brand & Collapse Toggle -->
+    <div id="sidebar-header" class="sidebar-top">
+      <button id="btn-sidebar-toggle" class="sidebar-icon-btn" title="Toggle sidebar menu" aria-label="Toggle sidebar menu">
+        <svg class="nav-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
       </button>
+      <div class="sidebar-brand-text">
+        <span class="brand-title">VOICE PAD</span>
+      </div>
     </div>
 
-    <div id="session-list-wrapper">
+    <!-- Navigation Items -->
+    <nav class="sidebar-nav">
+      <button id="btn-new-session" class="nav-item-btn" title="New session (Ctrl+N)" aria-label="New session">
+        <div class="nav-icon-wrapper">
+          <svg class="nav-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+        </div>
+        <span class="nav-item-label">New Session</span>
+      </button>
+
+      <button id="btn-search-toggle" class="nav-item-btn" title="Search sessions (Ctrl+F)" aria-label="Search sessions">
+        <div class="nav-icon-wrapper">
+          <svg class="nav-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        </div>
+        <span class="nav-item-label">Search</span>
+      </button>
+
+      <!-- Search Input Box (visible when expanded) -->
+      <div id="sidebar-search-box" class="sidebar-search-container" style="display: none;">
+        <input id="input-search-sessions" type="text" placeholder="Filter sessions..." aria-label="Search sessions" spellcheck="false" />
+      </div>
+    </nav>
+
+    <!-- Session List -->
+    <div id="session-list-wrapper" class="sidebar-list-container">
+      <div class="session-list-header">
+        <span class="session-section-title">RECENT SESSIONS</span>
+      </div>
       <ul id="session-list" role="listbox" aria-label="Previous sessions">
-        <!-- populated by renderer.js -->
+        <!-- populated dynamically by renderer.ts -->
       </ul>
     </div>
 
-    <div id="sidebar-footer">
+    <!-- Sidebar Footer -->
+    <div id="sidebar-footer" class="sidebar-footer">
       <span id="sessions-root-label" title="Sessions folder"></span>
     </div>
   </aside>
 
-  <!-- ── Main area ─────────────────────────────────────────────────────── -->
-  <main id="main-area">
-    <!-- Title bar -->
-    <header id="editor-header">
-      <div id="title-wrapper">
-        <input
-          id="session-title"
-          type="text"
-          placeholder="Untitled session"
-          spellcheck="false"
-          aria-label="Session title"
-          disabled
-        />
-        <span id="autosave-indicator" aria-live="polite"></span>
+  <!-- ── Main Content Canvas (Brutalist Architecture) ─────────────────────── -->
+  <main id="main-area" class="main-canvas">
+    
+    <!-- Top Header (Brutalist, 0px border-radius) -->
+    <header id="editor-header" class="canvas-header">
+      <!-- Left: Breadcrumb / Path badge -->
+      <div class="header-left">
+        <div id="header-breadcrumb" class="breadcrumb-badge">
+          /SESSION/<span id="breadcrumb-slug">UNTITLED.md</span>
+        </div>
+        <span id="autosave-indicator" class="autosave-status" aria-live="polite"></span>
       </div>
-      <div id="header-meta">
-        <!-- Anchor controls (Iteration 5 - FR-6) -->
+
+      <!-- Right: Utility Controls & Theme Toggle -->
+      <div id="header-meta" class="header-right">
+        <!-- Anchor controls -->
         <button id="btn-move-anchor" class="btn-anchor" title="Move dictation anchor to caret (Ctrl+Alt+A)" aria-label="Dictate here">
           <span aria-hidden="true">⚓</span> Dictate Here
         </button>
@@ -53,55 +82,121 @@
           Jump to ⚓
         </button>
 
-        <!-- Mic selection dropdown (FR-10) -->
+        <!-- Mic Selection -->
         <select id="mic-select" class="header-select" title="Microphone selection" aria-label="Microphone selection">
           <option value="">Default Microphone</option>
         </select>
 
-        <!-- Dictation toggle button with level meter (FR-4, FR-10) -->
-        <button id="btn-dictate" class="btn-dictate" title="Toggle dictation recording" aria-label="Toggle dictation" disabled>
-          <span id="dictate-icon" aria-hidden="true">🎙️</span>
-          <span id="dictate-label">Dictate</span>
-          <span id="level-meter-wrapper" aria-hidden="true"><span id="level-meter-bar"></span></span>
-        </button>
+        <!-- Word count -->
+        <span id="word-count" class="meta-word-count" aria-label="Word count">0 words</span>
 
-        <div id="sidecar-status-pill" class="pill pill-connecting" title="Speech sidecar status" role="status" aria-live="polite">
-          <span class="pill-dot" aria-hidden="true"></span>
-          <span id="sidecar-status-text">Connecting…</span>
-        </div>
-        <span id="word-count" aria-label="Word count">0 words</span>
+        <!-- Theme Toggle Button -->
+        <button id="btn-theme-toggle" class="btn-theme-toggle" title="Toggle light/dark theme" aria-label="Toggle theme">
+          <svg id="theme-icon-sun" class="theme-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          <svg id="theme-icon-moon" class="theme-svg" style="display:none;" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+        </button>
       </div>
     </header>
 
-    <!-- CodeMirror editor mount point -->
-    <div id="editor-mount" aria-label="Document editor" tabindex="-1"></div>
+    <!-- Editor Scroll Canvas -->
+    <div id="editor-container" class="editor-scroll-area">
+      <div class="document-wrapper">
+        <!-- Document Title (Brutalist H1 style) -->
+        <div id="title-wrapper" class="document-title-container">
+          <input
+            id="session-title"
+            class="document-title-input"
+            type="text"
+            placeholder="SYSTEM ARCHITECTURE NOTE"
+            spellcheck="false"
+            aria-label="Session title"
+            disabled
+          />
+        </div>
 
-    <!-- Empty state shown before any session is open -->
-    <div id="empty-state" aria-hidden="false">
-      <div id="empty-icon" aria-hidden="true">🧠</div>
-      <h2>Start brainstorming</h2>
-      <p>Create a new session or pick one from the left.</p>
-      <button id="btn-empty-new" aria-label="Create new session">New session</button>
+        <!-- CodeMirror Editor Mount Point -->
+        <div id="editor-mount" aria-label="Document editor" tabindex="-1"></div>
+
+        <!-- Live Speculative Anchor Box (active when recording) -->
+        <div id="speculative-anchor-box" class="speculative-anchor-box" style="display: none;">
+          <p class="speculative-line">
+            <span class="speculative-cursor"></span>
+            <span id="speculative-text">Streaming speech directly to dictation anchor...</span>
+          </p>
+        </div>
+      </div>
     </div>
+
+    <!-- Empty State -->
+    <div id="empty-state" class="empty-state-canvas" aria-hidden="false">
+      <div class="empty-state-card">
+        <div class="empty-icon-box">
+          <svg class="empty-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/></svg>
+        </div>
+        <h2>Start Brainstorming</h2>
+        <p>Create a new document or pick a session from the rail.</p>
+        <button id="btn-empty-new" class="btn-create-primary" aria-label="Create new session">INIT_SESSION</button>
+      </div>
+    </div>
+
+    <!-- ── 3. Floating Dictation Dock (Glassmorphic & Rounded Pill) ────────── -->
+    <div id="dictation-dock" class="floating-dock-wrapper">
+      <div class="floating-dock-card">
+        
+        <!-- Left: Telemetry & Live Audio Waveform / Status Dot -->
+        <div class="dock-telemetry">
+          <!-- Live Audio Visualizer (5 animated bars when recording) -->
+          <div id="dock-waveform" class="dock-waveform-bars" style="display: none;" aria-hidden="true">
+            <span class="wave-bar bar-1"></span>
+            <span class="wave-bar bar-2"></span>
+            <span class="wave-bar bar-3"></span>
+            <span class="wave-bar bar-4"></span>
+            <span class="wave-bar bar-5"></span>
+          </div>
+
+          <!-- Status Dot when idle -->
+          <div id="dock-status-dot" class="dock-status-dot dot-idle" aria-hidden="true"></div>
+
+          <!-- Technical Specs -->
+          <div class="dock-meta-info">
+            <span id="dock-model-title" class="dock-model-text">MODEL: small.en</span>
+            <span id="dock-sub-status" class="dock-sub-text">TARGET: CPU | IPC: LOCAL</span>
+          </div>
+        </div>
+
+        <!-- Hidden legacy hooks for compatibility -->
+        <div id="sidecar-status-pill" class="pill pill-connecting" style="display:none;"><span id="sidecar-status-text"></span></div>
+        <span id="level-meter-wrapper" style="display:none;"><span id="level-meter-bar"></span></span>
+
+        <!-- Right: Primary Action Pill Button -->
+        <button id="btn-dictate" class="dock-action-pill" title="Toggle dictation (Ctrl+Space)" aria-label="Toggle dictation" disabled>
+          <span id="dictate-icon" class="action-icon">
+            <svg class="dock-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/></svg>
+          </span>
+          <span id="dictate-label" class="action-label">INIT_DICTATION</span>
+        </button>
+      </div>
+    </div>
+
   </main>
 
-  <!-- ── Dialogs ───────────────────────────────────────────────────────── -->
-
-  <!-- New session dialog -->
-  <dialog id="dialog-new-session" aria-labelledby="dialog-new-title">
-    <form id="form-new-session" method="dialog">
-      <h2 id="dialog-new-title">New session</h2>
-      <label for="input-new-title">Title</label>
-      <input id="input-new-title" type="text" placeholder="Untitled" autocomplete="off" />
-      <div id="dialog-new-actions">
-        <button type="button" id="btn-dialog-cancel" value="cancel">Cancel</button>
-        <button type="submit" id="btn-dialog-create" value="create">Create</button>
+  <!-- ── New Session Dialog ───────────────────────────────────────────────── -->
+  <dialog id="dialog-new-session" class="brutalist-dialog" aria-labelledby="dialog-new-title">
+    <form id="form-new-session" method="dialog" class="dialog-form">
+      <h2 id="dialog-new-title" class="dialog-title">CREATE NEW SESSION</h2>
+      <div class="dialog-field">
+        <label for="input-new-title">SESSION TITLE</label>
+        <input id="input-new-title" type="text" placeholder="e.g. System Architecture Note" autocomplete="off" />
+      </div>
+      <div id="dialog-new-actions" class="dialog-actions">
+        <button type="button" id="btn-dialog-cancel" class="btn-dialog-ghost" value="cancel">CANCEL</button>
+        <button type="submit" id="btn-dialog-create" class="btn-dialog-submit" value="create">CREATE</button>
       </div>
     </form>
   </dialog>
- 
-  <!-- Non-blocking notifications container (Iteration 4.2 Item 9) -->
-  <div id="chunk-failed-container" aria-live="polite"></div>
+
+  <!-- Notification Container -->
+  <div id="chunk-failed-container" class="notifications-container" aria-live="polite"></div>
 
   <script type="module" src="../../dist/renderer/renderer.bundle.js"></script>
 </body>
