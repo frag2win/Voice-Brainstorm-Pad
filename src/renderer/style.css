@@ -85,6 +85,11 @@ html, body {
   transition: background-color 300ms ease, color 300ms ease;
 }
 
+input, textarea, [contenteditable="true"], .cm-content {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+
 body {
   display: flex;
 }
@@ -252,6 +257,10 @@ body {
   padding: 12px 8px;
   display: flex;
   flex-direction: column;
+}
+
+.sidebar-rail.collapsed .sidebar-list-container {
+  display: none !important;
 }
 
 .session-list-header {
@@ -885,30 +894,78 @@ body.theme-light .floating-dock-card {
   animation: pulse 1s infinite ease-in-out;
 }
 
+/* ── Document Canvas Session Title ───────────────────────────────────────── */
+.session-title-input {
+  font-family: var(--font-sans);
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--text-bright);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  padding: 0 0 16px 0;
+  margin-bottom: 24px;
+  width: 100%;
+  outline: none;
+  border-radius: 0;
+  box-sizing: border-box;
+  display: block;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  transition: border-color 150ms ease;
+}
+
+.session-title-input:focus {
+  border-bottom-color: var(--border-focus);
+}
+
+.session-title-input::placeholder {
+  color: var(--text-dim);
+  opacity: 0.5;
+}
+
+.session-title-input:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
 /* ── Dialogs ────────────────────────────────────────────────────────────── */
-.brutalist-dialog {
+dialog.brutalist-dialog {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   color: var(--text-bright);
-  padding: 24px;
+  padding: 28px 32px;
   border-radius: 0;
-  max-width: 440px;
-  width: 90%;
+  max-width: 460px;
+  width: 90vw;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.7);
+  outline: none;
   margin: auto;
-  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.6);
+  position: fixed;
+  inset: 0;
+  z-index: 100;
 }
 
-.brutalist-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.7);
+dialog.brutalist-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.75);
   backdrop-filter: blur(4px);
+}
+
+.dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
 
 .dialog-title {
   font-family: var(--font-sans);
-  font-weight: 700;
-  font-size: 14px;
-  letter-spacing: 0.1em;
-  margin-bottom: 20px;
+  font-weight: 800;
+  font-size: 13px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  margin: 0;
   color: var(--text-bright);
 }
 
@@ -916,12 +973,13 @@ body.theme-light .floating-dock-card {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-bottom: 24px;
 }
 
 .dialog-field label {
+  font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 0.15em;
+  text-transform: uppercase;
   color: var(--text-muted);
   font-weight: 700;
 }
@@ -932,30 +990,45 @@ body.theme-light .floating-dock-card {
   color: var(--text-bright);
   font-family: var(--font-mono);
   font-size: 13px;
-  padding: 10px 12px;
+  padding: 10px 14px;
   border-radius: 0;
   outline: none;
+  width: 100%;
+  box-sizing: border-box;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  transition: border-color 150ms ease;
 }
 
 .dialog-field input:focus {
   border-color: var(--border-focus);
 }
 
+.dialog-field input::placeholder {
+  color: var(--text-dim);
+  opacity: 0.5;
+}
+
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
+  margin-top: 6px;
 }
 
 .btn-dialog-ghost {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text-dim);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 11px;
-  padding: 8px 16px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 9px 18px;
   cursor: pointer;
   border-radius: 0;
+  transition: all 150ms ease;
 }
 
 .btn-dialog-ghost:hover {
@@ -964,15 +1037,23 @@ body.theme-light .floating-dock-card {
 }
 
 .btn-dialog-submit {
-  background: var(--accent);
-  color: var(--accent-text);
-  border: 1px solid var(--accent);
-  font-family: var(--font-mono);
-  font-weight: 700;
+  background: var(--text-bright);
+  color: var(--bg-canvas);
+  border: 1px solid var(--text-bright);
+  font-family: var(--font-sans);
+  font-weight: 800;
   font-size: 11px;
-  padding: 8px 18px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 9px 20px;
   cursor: pointer;
   border-radius: 0;
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.btn-dialog-submit:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
 }
 
 /* ── Notifications ──────────────────────────────────────────────────────── */

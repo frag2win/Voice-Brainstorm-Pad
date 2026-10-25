@@ -52,11 +52,6 @@
         <!-- populated dynamically by renderer.ts -->
       </ul>
     </div>
-
-    <!-- Sidebar Footer -->
-    <div id="sidebar-footer" class="sidebar-footer">
-      <span id="sessions-root-label" title="Sessions folder"></span>
-    </div>
   </aside>
 
   <!-- ── Main Content Canvas (Brutalist Architecture) ─────────────────────── -->
@@ -183,14 +178,14 @@
   <!-- ── New Session Dialog ───────────────────────────────────────────────── -->
   <dialog id="dialog-new-session" class="brutalist-dialog" aria-labelledby="dialog-new-title">
     <form id="form-new-session" method="dialog" class="dialog-form">
-      <h2 id="dialog-new-title" class="dialog-title">CREATE NEW SESSION</h2>
+      <h2 id="dialog-new-title" class="dialog-title">CREATE NEW SECTION</h2>
       <div class="dialog-field">
-        <label for="input-new-title">SESSION TITLE</label>
+        <label for="input-new-title">SECTION NAME</label>
         <input id="input-new-title" type="text" placeholder="e.g. System Architecture Note" autocomplete="off" />
       </div>
       <div id="dialog-new-actions" class="dialog-actions">
         <button type="button" id="btn-dialog-cancel" class="btn-dialog-ghost" value="cancel">CANCEL</button>
-        <button type="submit" id="btn-dialog-create" class="btn-dialog-submit" value="create">CREATE</button>
+        <button type="submit" id="btn-dialog-create" class="btn-dialog-submit" value="create">CREATE SECTION</button>
       </div>
     </form>
   </dialog>

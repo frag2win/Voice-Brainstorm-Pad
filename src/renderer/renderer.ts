@@ -103,7 +103,7 @@ const elDialog        = document.getElementById("dialog-new-session") as HTMLDia
 const elFormNew       = document.getElementById("form-new-session") as HTMLFormElement;
 const elInputTitle    = document.getElementById("input-new-title") as HTMLInputElement;
 const elBtnCancel     = document.getElementById("btn-dialog-cancel")!;
-const elRootLabel     = document.getElementById("sessions-root-label")!;
+const elRootLabel     = document.getElementById("sessions-root-label") as HTMLElement | null;
 const elSidecarPill   = document.getElementById("sidecar-status-pill")!;
 const elSidecarText   = document.getElementById("sidecar-status-text")!;
 const elBtnDictate    = document.getElementById("btn-dictate") as HTMLButtonElement;
@@ -450,14 +450,26 @@ elSessionTitle.addEventListener("keydown", (e) => {
 
 function openNewDialog(): void {
   elInputTitle.value = "";
-  elDialog.showModal();
-  elInputTitle.focus();
+  if (!elDialog.open) {
+    elDialog.showModal();
+  }
+  setTimeout(() => {
+    elInputTitle.focus();
+    elInputTitle.select();
+  }, 50);
 }
 
 elBtnNew.addEventListener("click", openNewDialog);
 elBtnEmptyNew.addEventListener("click", openNewDialog);
 
-elBtnCancel.addEventListener("click", () => elDialog.close("cancel"));
+elBtnCancel.addEventListener("click", (e) => {
+  e.preventDefault();
+  elDialog.close("cancel");
+});
+
+elFormNew.addEventListener("click", (e) => {
+  e.stopPropagation();
+});
 
 elFormNew.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -466,13 +478,9 @@ elFormNew.addEventListener("submit", async (e) => {
   await handleCreateSession(title);
 });
 
-// Close on backdrop click
+// Close on backdrop click: ONLY when the backdrop itself is clicked
 elDialog.addEventListener("click", (e) => {
-  const rect = elDialog.getBoundingClientRect();
-  if (
-    e.clientX < rect.left || e.clientX > rect.right ||
-    e.clientY < rect.top  || e.clientY > rect.bottom
-  ) {
+  if (e.target === elDialog) {
     elDialog.close("cancel");
   }
 });
@@ -705,10 +713,12 @@ async function init(): Promise<void> {
     renderSessionList();
   });
 
-  // Populate sessions root path in footer
-  const rootPath = await window.vbp.sessions.rootPath();
-  elRootLabel.textContent = rootPath;
-  elRootLabel.title = rootPath;
+  // Populate sessions root path if element exists
+  if (elRootLabel) {
+    const rootPath = await window.vbp.sessions.rootPath();
+    elRootLabel.textContent = rootPath;
+    elRootLabel.title = rootPath;
+  }
 
   // Wire Dictation Toggle Button
   elBtnDictate.addEventListener("click", async () => {
