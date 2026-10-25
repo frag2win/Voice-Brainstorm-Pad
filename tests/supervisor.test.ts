@@ -54,8 +54,11 @@ describe("SidecarSupervisor", () => {
     // Port should be assigned and > 0
     expect(supervisor.getPort()).toBeGreaterThan(0);
 
-    // Give it a moment to complete handshake and become idle
-    await new Promise((r) => setTimeout(r, 1200));
+    // Wait until sidecar completes model warmup and transitions to idle
+    const startWait = Date.now();
+    while (supervisor.getState() !== "idle" && Date.now() - startWait < 8000) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
 
     expect(supervisor.getState()).toBe("idle");
     expect(states).toContain("connecting");

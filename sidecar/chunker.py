@@ -33,11 +33,11 @@ except ImportError:
 class ChunkerConfig:
     min_chunk_s: float = 4.0
     target_chunk_s: float = 8.0
-    max_chunk_s: float = 20.0
-    min_silence_s: float = 0.3
+    max_chunk_s: float = 15.0       # Progressive cut limit (reduced from 20s to meet 10s latency target)
+    min_silence_s: float = 0.3      # 300ms pause target
     speech_padding_s: float = 0.2
     vad_threshold: float = 0.5
-    energy_threshold: float = 0.01
+    energy_threshold: float = 0.003  # Preserves quiet speech from laptop microphones
     sample_rate: int = 16000
     frame_size: int = 512
 
@@ -60,9 +60,8 @@ class AudioChunker:
         os.makedirs(self.chunks_dir, exist_ok=True)
         self.jsonl_path = os.path.join(session_dir, "chunks.jsonl")
 
-        # Resume sequence numbering & total sample count from existing chunks.jsonl
+        # Resume sequence numbering from existing chunks.jsonl
         self.sequence_num = 0
-        self._total_samples_emitted = 0
         if os.path.exists(self.jsonl_path):
             try:
                 with open(self.jsonl_path, "r", encoding="utf-8") as f:
@@ -71,9 +70,20 @@ class AudioChunker:
                         if line:
                             data = json.loads(line)
                             self.sequence_num = max(self.sequence_num, data.get("seq", 0))
-                            self._total_samples_emitted += data.get("samples", 0)
             except Exception:
                 pass
+
+        # Resume sample offset from audio.wav (Defect 2 fix: authoritative audio sample count)
+        self._total_samples_emitted = 0
+        audio_wav_path = os.path.join(session_dir, "audio.wav")
+        if os.path.exists(audio_wav_path):
+            try:
+                import wave
+                with wave.open(audio_wav_path, "rb") as wf:
+                    self._total_samples_emitted = wf.getnframes()
+            except Exception:
+                size = os.path.getsize(audio_wav_path)
+                self._total_samples_emitted = max(0, (size - 44) // 2)
 
         # Load Silero VAD model if available
         self._vad = None
@@ -86,32 +96,28 @@ class AudioChunker:
         # Internal state
         self._buffer: List[np.ndarray] = []
         self._current_chunk_samples = 0
-        self._total_samples_emitted = 0
         self._silence_samples = 0
         self._has_speech = False
 
     def _is_speech(self, frame: np.ndarray) -> bool:
         """Evaluate whether a 512-sample frame contains speech."""
-        # Energy check: pure zeros or near-zero noise is silence
         rms = float(np.sqrt(np.mean(frame ** 2)))
         if rms < self.config.energy_threshold:
             return False
 
-        # If Silero VAD is loaded, run neural model
+        # If Silero VAD is loaded, run neural model (pure neural check, no loud-click override)
         if self._vad is not None:
             try:
                 prob = float(self._vad(frame)[0])
-                return prob >= self.config.vad_threshold or rms >= 0.08
+                return prob >= self.config.vad_threshold
             except Exception:
                 pass
 
-        # Fallback to energy threshold
         return rms >= self.config.energy_threshold
 
     def process_frame(self, frame: np.ndarray) -> Optional[AudioChunk]:
-        """Ingest a 512-sample frame, evaluate pause boundaries, and return AudioChunk if cut."""
+        """Ingest a 512-sample frame, evaluate progressive pauses, and return AudioChunk if cut."""
         if len(frame) != self.config.frame_size:
-            # Pad or trim if needed
             if len(frame) < self.config.frame_size:
                 frame = np.pad(frame, (0, self.config.frame_size - len(frame)))
             else:
@@ -130,19 +136,18 @@ class AudioChunker:
         cur_duration = self._current_chunk_samples / self.config.sample_rate
         silence_duration = self._silence_samples / self.config.sample_rate
 
-        # ── Cut Decision Rules ────────────────────────────────────────────────
-        should_cut = False
-
-        # Rule 1: We hit target duration (e.g. >= 8s) AND found a pause >= 300ms
-        if cur_duration >= self.config.target_chunk_s and silence_duration >= self.config.min_silence_s:
-            should_cut = True
-
-        # Rule 2: Hard maximum duration exceeded (e.g. >= 20s continuous speech)
-        elif cur_duration >= self.config.max_chunk_s:
-            should_cut = True
-
-        if should_cut:
+        # ── Cut Decision Rules (Defect 4: Progressive pauses + Quietest frame) ──
+        # Progressive pauses: shorter pauses are accepted as chunk grows longer
+        if cur_duration >= 12.0 and silence_duration >= 0.08:
             return self._emit_chunk()
+        elif cur_duration >= 10.0 and silence_duration >= 0.15:
+            return self._emit_chunk()
+        elif cur_duration >= self.config.target_chunk_s and silence_duration >= self.config.min_silence_s:
+            return self._emit_chunk()
+
+        # Hard limit reached (~15s continuous speech): force cut at quietest frame in last 3s
+        elif cur_duration >= self.config.max_chunk_s:
+            return self._emit_forced_cut(search_window_s=3.0)
 
         return None
 
@@ -152,19 +157,43 @@ class AudioChunker:
             return self._emit_chunk()
         return None
 
-    def _emit_chunk(self) -> Optional[AudioChunk]:
-        """Finalize and save current chunk if it contains speech, or discard silence."""
+    def _emit_forced_cut(self, search_window_s: float = 3.0) -> Optional[AudioChunk]:
+        """Find the quietest frame in the search window, split buffer, and carry remainder forward."""
         if not self._buffer:
             return None
 
-        samples = np.concatenate(self._buffer)
+        frames_in_search = int(search_window_s * self.config.sample_rate / self.config.frame_size)
+        window_size = min(len(self._buffer), max(1, frames_in_search))
+        search_window = self._buffer[-window_size:]
+
+        # Find frame with minimal RMS energy
+        min_idx = min(range(len(search_window)), key=lambda i: float(np.mean(search_window[i] ** 2)))
+        cut_point = len(self._buffer) - window_size + min_idx + 1
+
+        chunk_frames = self._buffer[:cut_point]
+        remainder_frames = self._buffer[cut_point:]
+
+        return self._emit_frames(chunk_frames, remainder_frames)
+
+    def _emit_chunk(self) -> Optional[AudioChunk]:
+        """Finalize and save all currently buffered audio as a chunk."""
+        frames = self._buffer
+        self._buffer = []
+        return self._emit_frames(frames, remainder_frames=[])
+
+    def _emit_frames(self, chunk_frames: List[np.ndarray], remainder_frames: List[np.ndarray]) -> Optional[AudioChunk]:
+        if not chunk_frames:
+            self._buffer = remainder_frames
+            return None
+
+        samples = np.concatenate(chunk_frames)
         duration_s = len(samples) / self.config.sample_rate
         t_start = self._total_samples_emitted / self.config.sample_rate
         t_end = t_start + duration_s
 
-        # Reset buffer state
-        self._buffer = []
-        self._current_chunk_samples = 0
+        # Reset buffer to the remainder
+        self._buffer = remainder_frames
+        self._current_chunk_samples = sum(len(f) for f in remainder_frames)
         self._silence_samples = 0
 
         # Discard pure non-speech chunks (TRD 2.3)
@@ -172,7 +201,7 @@ class AudioChunker:
             self._total_samples_emitted += len(samples)
             return None
 
-        self._has_speech = False
+        self._has_speech = any(self._is_speech(f) for f in remainder_frames) if remainder_frames else False
         self.sequence_num += 1
         seq = self.sequence_num
 
@@ -181,8 +210,9 @@ class AudioChunker:
         chunk_path = os.path.join(self.chunks_dir, chunk_filename)
         self._write_chunk_wav(chunk_path, samples)
 
-        # Log audit entry to chunks.jsonl
+        # Log audit entry to strictly append-only chunks.jsonl (Defect 1 fix)
         rel_audio_path = os.path.join("chunks", chunk_filename).replace("\\", "/")
+        import time as _t
         audit_entry = {
             "seq": seq,
             "t_start": round(t_start, 3),
@@ -190,9 +220,11 @@ class AudioChunker:
             "duration_s": round(duration_s, 3),
             "samples": len(samples),
             "audio_file": rel_audio_path,
+            "timestamp": _t.time(),
         }
         with open(self.jsonl_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(audit_entry) + "\n")
+            f.flush()
 
         self._total_samples_emitted += len(samples)
 
