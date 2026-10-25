@@ -18,6 +18,9 @@ import hmac
 import json
 import logging
 import os
+os.environ.setdefault("MKL_NUM_THREADS", "4")
+os.environ.setdefault("OMP_NUM_THREADS", "4")
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 import signal
 import sys
 from typing import Any, Dict, List, Optional

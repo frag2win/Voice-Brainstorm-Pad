@@ -14,6 +14,9 @@ from dataclasses import dataclass
 import json
 import logging
 import os
+os.environ.setdefault("MKL_NUM_THREADS", "4")
+os.environ.setdefault("OMP_NUM_THREADS", "4")
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 import queue
 import re
 import threading
@@ -75,7 +78,7 @@ class TranscriberConfig:
     language: str = "en"
     beam_size: int = 1
     condition_on_previous_text: bool = False
-    temperature: tuple = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
+    temperature: tuple = (0.0, 0.2, 0.4)
     compression_ratio_threshold: float = 2.4
     log_prob_threshold: float = -1.0
     no_speech_threshold: float = 0.6
@@ -240,13 +243,37 @@ class Transcriber:
         )
 
         texts = []
-        for s in segments:
-            # Keep segments unless confidence is overwhelmingly non-speech
-            if getattr(s, "no_speech_prob", 0.0) > 0.90 and getattr(s, "avg_logprob", 0.0) < -1.5:
-                continue
-            txt = s.text.strip()
-            if txt:
-                texts.append(txt)
+        try:
+            for s in segments:
+                # Keep segments unless confidence is overwhelmingly non-speech
+                if getattr(s, "no_speech_prob", 0.0) > 0.90 and getattr(s, "avg_logprob", 0.0) < -1.5:
+                    continue
+                txt = s.text.strip()
+                if txt:
+                    texts.append(txt)
+        except RuntimeError as e:
+            if "mkl_malloc" in str(e).lower() or "memory" in str(e).lower():
+                logger.warning(
+                    f"MKL memory pressure during chunk #{seq} ({e}), running garbage collection and retrying with greedy decoding..."
+                )
+                import gc
+                gc.collect()
+                # Retry with greedy decoding (temperature=0.0) to avoid memory expansion
+                retry_segments, _ = self.model.transcribe(
+                    audio_path,
+                    language=self.config.language,
+                    beam_size=1,
+                    condition_on_previous_text=False,
+                    temperature=0.0,
+                    vad_filter=False,
+                )
+                texts = []
+                for s in retry_segments:
+                    txt = s.text.strip()
+                    if txt:
+                        texts.append(txt)
+            else:
+                raise
 
         raw_text = " ".join(texts)
         clean_text = clean_transcript(raw_text)
