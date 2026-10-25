@@ -22,8 +22,8 @@ from sidecar.server import SidecarServer
 
 
 @asynccontextmanager
-async def run_sidecar(token: str):
-    server = SidecarServer(host="127.0.0.1", port=0, token=token)
+async def run_sidecar(token: str, load_transcriber: bool = False):
+    server = SidecarServer(host="127.0.0.1", port=0, token=token, load_transcriber=load_transcriber)
     await server.start()
     try:
         yield server, server.port

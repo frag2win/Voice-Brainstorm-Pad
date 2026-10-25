@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatDictationText, calculateAudioPauseDuration } from "../src/renderer/spacing";
+import { formatDictationText, calculateAudioPauseDuration, formatChunkFailedNotice } from "../src/renderer/spacing";
 
 describe("formatDictationText - Spacing & Formatting Rules", () => {
   it("does not prepend leading space at the start of an empty document", () => {
@@ -106,4 +106,9 @@ describe("formatDictationText - Spacing & Formatting Rules", () => {
     expect(res.insertText).toBe(" continuing the same thought smoothly.");
     expect(res.hasLeadingBreak).toBe(false);
   });
+
+  it("formats chunk failed notice correctly", () => {
+    expect(formatChunkFailedNotice(7)).toBe("Chunk 7 could not be transcribed (audio kept)");
+  });
 });
+

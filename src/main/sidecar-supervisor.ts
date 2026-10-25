@@ -339,6 +339,10 @@ export class SidecarSupervisor extends EventEmitter {
         this.emit("transcript", data);
         break;
 
+      case "chunk_failed":
+        this.emit("chunk_failed", data);
+        break;
+
       case "pong":
         this.missedPongs = 0;
         if (this.pingTimeoutTimer) {

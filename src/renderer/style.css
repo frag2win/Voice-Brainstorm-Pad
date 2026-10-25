@@ -608,3 +608,40 @@ dialog input[type="text"]::placeholder { color: var(--text-muted); }
   0%, 100% { opacity: 0.55; }
   50% { opacity: 0.95; }
 }
+
+/* ── Chunk Failed Non-Blocking Notice (Iteration 4.2 Item 9) ──────────────── */
+#chunk-failed-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+  pointer-events: none;
+}
+
+.chunk-failed-notice {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--danger);
+  color: var(--text);
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  pointer-events: auto;
+  opacity: 0;
+  transform: translateY(10px);
+  animation: notice-fade-in 0.25s forwards;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+@keyframes notice-fade-in {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+

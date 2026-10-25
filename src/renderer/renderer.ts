@@ -24,7 +24,7 @@ import {
   jumpToAnchor,
   dictateTextTransaction,
 } from "./anchor";
-import { formatDictationText } from "./spacing";
+import { formatDictationText, formatChunkFailedNotice } from "./spacing";
 
 interface SidecarStatus {
   state: string;
@@ -55,6 +55,7 @@ declare global {
         onLevel(callback: (rms: number) => void): () => void;
         onChunk(callback: (chunk: any) => void): () => void;
         onTranscript(callback: (data: any) => void): () => void;
+        onChunkFailed(callback: (data: any) => void): () => void;
       };
     };
   }
@@ -551,6 +552,32 @@ function populateDevices(devices: Array<{ id: string; name: string }>): void {
   }
 }
 
+export function showChunkFailedNotice(seq: number): void {
+  let container = document.getElementById("chunk-failed-container");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "chunk-failed-container";
+    container.setAttribute("aria-live", "polite");
+    document.body.appendChild(container);
+  }
+  const notice = document.createElement("div");
+  notice.className = "chunk-failed-notice";
+  notice.setAttribute("role", "status");
+  notice.textContent = formatChunkFailedNotice(seq);
+  container.appendChild(notice);
+
+  setTimeout(() => {
+    notice.style.opacity = "0";
+    notice.style.transform = "translateY(10px)";
+    setTimeout(() => {
+      notice.remove();
+      if (container && container.children.length === 0) {
+        container.remove();
+      }
+    }, 300);
+  }, 5000);
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 async function init(): Promise<void> {
@@ -623,6 +650,14 @@ async function init(): Promise<void> {
       const trSpec = dictateTextTransaction(editorView.state, formatted.insertText);
       trSpec.scrollIntoView = true;
       editorView.dispatch(trSpec);
+    }
+  });
+
+  // Wire Chunk Failed Events (Iteration 4.2 Item 9)
+  window.vbp.sidecar.onChunkFailed((data: any) => {
+    console.warn(`[Transcriber] chunk #${data?.seq} failed: ${data?.error}`);
+    if (typeof data?.seq === "number") {
+      showChunkFailedNotice(data.seq);
     }
   });
 

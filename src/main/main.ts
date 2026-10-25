@@ -175,6 +175,12 @@ app.whenReady().then(() => {
       win.webContents.send("sidecar:transcript", data);
     }
   });
+  supervisor.on("chunk_failed", (data) => {
+    console.warn(`[Supervisor] chunk_failed: #${data?.seq}`);
+    if (win && !win.isDestroyed()) {
+      win.webContents.send("sidecar:chunk_failed", data);
+    }
+  });
   supervisor.on("log", (msg) => console.log(`[Sidecar] ${msg}`));
   supervisor.on("error", (err) => console.error(`[Supervisor Error]`, err));
 

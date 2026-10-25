@@ -138,4 +138,42 @@ describe("SidecarSupervisor", () => {
 
     wss.close();
   });
+
+  it("emits chunk_failed event when receiving chunk_failed message", async () => {
+    supervisor = new SidecarSupervisor({ autoStart: false });
+    let receivedPayload: any = null;
+    supervisor.on("chunk_failed", (data) => {
+      receivedPayload = data;
+    });
+
+    const wss = new WebSocketServer({ port: 0 });
+    const address = wss.address() as any;
+    const port = address.port;
+
+    wss.on("connection", (ws) => {
+      ws.send(JSON.stringify({
+        type: "chunk_failed",
+        seq: 4,
+        audio_file: "chunk_0004.wav",
+        error: "Memory allocation failed",
+      }));
+    });
+
+    (supervisor as any).connectWebSocket(port);
+
+    const startWait = Date.now();
+    while (!receivedPayload && Date.now() - startWait < 3000) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    expect(receivedPayload).toEqual({
+      type: "chunk_failed",
+      seq: 4,
+      audio_file: "chunk_0004.wav",
+      error: "Memory allocation failed",
+    });
+
+    wss.close();
+  });
 });
+

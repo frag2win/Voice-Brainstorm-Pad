@@ -98,13 +98,14 @@ def list_audio_devices() -> List[Dict[str, Any]]:
 
 
 class SidecarServer:
-    def __init__(self, host: str = "127.0.0.1", port: int = 0, token: Optional[str] = None):
+    def __init__(self, host: str = "127.0.0.1", port: int = 0, token: Optional[str] = None, load_transcriber: bool = True):
         self.host = host
         self.requested_port = port
         self.token = token or os.environ.get("VBP_SIDECAR_TOKEN", "")
+        self.load_transcriber = load_transcriber
         self.server: Optional[Server] = None
         self.port: int = 0
-        self.state: str = "loading"
+        self.state: str = "loading" if load_transcriber else "idle"
         self._stop_event = asyncio.Event()
 
         # Recorder, Chunker & Transcriber components (Iteration 3 & 4)
@@ -116,6 +117,7 @@ class SidecarServer:
         self._active_ws: Optional[Any] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._drain_task: Optional[asyncio.Task] = None
+        self._load_task: Optional[asyncio.Future] = None
 
     def _on_transcript(self, result: TranscriptionResult) -> None:
         """Called by Transcriber worker thread when transcription of a chunk completes."""
@@ -198,57 +200,77 @@ class SidecarServer:
 
         logger.info(f"Sidecar listening on ws://{self.host}:{self.port}")
 
-        # Initialize Whisper Transcriber worker asynchronously so port announcement is instant (Iteration 4)
-        loop = asyncio.get_running_loop()
-        def _load():
-            try:
-                self.transcriber = Transcriber(
-                    config=TranscriberConfig(model_name="small.en", cpu_threads=4),
-                    on_transcript=self._on_transcript,
-                    on_chunk_failed=self._on_chunk_failed,
-                    auto_warmup=True,
-                )
-                self.state = "idle"
-            except Exception as e:
-                logger.warning(f"Could not load small.en model ({e}), falling back to base.en")
+        # Initialize Whisper Transcriber worker asynchronously if enabled (Iteration 4)
+        if self.load_transcriber:
+            loop = asyncio.get_running_loop()
+            def _load():
+                if self._stop_event.is_set():
+                    return
                 try:
-                    self.transcriber = Transcriber(
-                        config=TranscriberConfig(model_name="base.en", cpu_threads=4),
+                    t = Transcriber(
+                        config=TranscriberConfig(model_name="small.en", cpu_threads=4),
                         on_transcript=self._on_transcript,
                         on_chunk_failed=self._on_chunk_failed,
                         auto_warmup=True,
                     )
+                    if self._stop_event.is_set():
+                        t.stop()
+                        return
+                    self.transcriber = t
                     self.state = "idle"
-                except Exception as e2:
-                    logger.error(f"Failed to load Whisper model: {e2}")
-                    self.state = "error"
+                except Exception as e:
+                    if self._stop_event.is_set():
+                        return
+                    logger.warning(f"Could not load small.en model ({e}), falling back to base.en")
+                    try:
+                        t = Transcriber(
+                            config=TranscriberConfig(model_name="base.en", cpu_threads=4),
+                            on_transcript=self._on_transcript,
+                            on_chunk_failed=self._on_chunk_failed,
+                            auto_warmup=True,
+                        )
+                        if self._stop_event.is_set():
+                            t.stop()
+                            return
+                        self.transcriber = t
+                        self.state = "idle"
+                    except Exception as e2:
+                        logger.error(f"Failed to load Whisper model: {e2}")
+                        self.state = "error"
 
-            # If client is already connected during model load, push updated state & ready info
-            if self._active_ws and self._loop:
-                devices = list_audio_devices()
-                ready_payload = json.dumps({
-                    "type": "ready",
-                    "version": PROTOCOL_VERSION,
-                    "engine": "faster-whisper",
-                    "model": self.transcriber.config.model_name if self.transcriber else "",
-                    "devices": devices,
-                })
-                state_payload = json.dumps({
-                    "type": "state",
-                    "version": PROTOCOL_VERSION,
-                    "state": self.state,
-                })
-                try:
-                    asyncio.run_coroutine_threadsafe(self._active_ws.send(ready_payload), self._loop)
-                    asyncio.run_coroutine_threadsafe(self._active_ws.send(state_payload), self._loop)
-                except Exception:
-                    pass
+                # If client is already connected during model load, push updated state & ready info
+                if self._active_ws and self._loop and not self._stop_event.is_set():
+                    devices = list_audio_devices()
+                    ready_payload = json.dumps({
+                        "type": "ready",
+                        "version": PROTOCOL_VERSION,
+                        "engine": "faster-whisper",
+                        "model": self.transcriber.config.model_name if self.transcriber else "",
+                        "devices": devices,
+                    })
+                    state_payload = json.dumps({
+                        "type": "state",
+                        "version": PROTOCOL_VERSION,
+                        "state": self.state,
+                    })
+                    try:
+                        asyncio.run_coroutine_threadsafe(self._active_ws.send(ready_payload), self._loop)
+                        asyncio.run_coroutine_threadsafe(self._active_ws.send(state_payload), self._loop)
+                    except Exception:
+                        pass
 
-        self._load_task = loop.run_in_executor(None, _load)
+            self._load_task = loop.run_in_executor(None, _load)
+        else:
+            self.state = "idle"
 
     async def stop(self) -> None:
         """Stop the WebSocket server and background workers."""
         self._stop_event.set()
+        if self._load_task and not self._load_task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(self._load_task), timeout=0.1)
+            except Exception:
+                pass
         if self.transcriber:
             self.transcriber.stop()
             self.transcriber = None

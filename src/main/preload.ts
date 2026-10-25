@@ -48,6 +48,7 @@ export interface VbpAPI {
     onLevel(callback: (rms: number) => void): () => void;
     onChunk(callback: (chunk: any) => void): () => void;
     onTranscript(callback: (data: any) => void): () => void;
+    onChunkFailed(callback: (data: any) => void): () => void;
   };
 }
 
@@ -69,8 +70,9 @@ const api: VbpAPI = {
     startListening: (sessionFolder: string, deviceId?: string) =>
       ipcRenderer.invoke("sidecar:start", { sessionFolder, deviceId }),
     stopListening: () => ipcRenderer.invoke("sidecar:stop"),
-    setDevice: (deviceId: string) =>
-      ipcRenderer.invoke("sidecar:setDevice", { deviceId }),
+    setDevice(deviceId: string) {
+      return ipcRenderer.invoke("sidecar:setDevice", { deviceId });
+    },
     onStateChange: (callback: (state: string) => void) => {
       const handler = (_event: any, state: string) => callback(state);
       ipcRenderer.on("sidecar:state", handler);
@@ -97,6 +99,13 @@ const api: VbpAPI = {
       ipcRenderer.on("sidecar:transcript", handler);
       return () => {
         ipcRenderer.removeListener("sidecar:transcript", handler);
+      };
+    },
+    onChunkFailed: (callback: (data: any) => void) => {
+      const handler = (_event: any, data: any) => callback(data);
+      ipcRenderer.on("sidecar:chunk_failed", handler);
+      return () => {
+        ipcRenderer.removeListener("sidecar:chunk_failed", handler);
       };
     },
   },

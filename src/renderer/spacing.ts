@@ -81,3 +81,8 @@ export function formatDictationText(
   // Default: prepend single space
   return { insertText: ` ${cleanChunk}`, hasLeadingBreak: false };
 }
+
+export function formatChunkFailedNotice(seq: number): string {
+  return `Chunk ${seq} could not be transcribed (audio kept)`;
+}
+
