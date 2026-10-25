@@ -1,10 +1,10 @@
-# Voice Brainstorm Pad 🎙️🧠
+# Voice Brainstorm Pad
 
 > **Local, privacy-first desktop voice brainstorm pad built for fast continuous dictation (300–400 wpm) on consumer CPU laptops without cloud dependencies.**
 
 ---
 
-## 📖 Overview
+## Overview
 
 **Voice Brainstorm Pad** is an Electron + Python desktop dictation and brainstorming tool designed specifically for fast, unstructured speech ("yapping"). Unlike traditional speech-to-text tools that freeze when speakers talk rapidly without pausing, Voice Brainstorm Pad employs an asynchronous audio pipeline that chunks speech dynamically, runs local speech-to-text using `faster-whisper`, and streams the transcribed text directly into a **CodeMirror 6** markdown editor without hijacking the user's active keyboard cursor.
 
@@ -16,50 +16,54 @@
 
 ---
 
-## 🏛️ System Architecture
+## System Architecture
 
 ```mermaid
-flowchart TD
-    subgraph UI ["Electron / TypeScript UI"]
-        CM["CodeMirror 6 Editor<br/>(Markdown, Anchor Decoration)"]
+flowchart LR
+    subgraph UI ["Electron UI Layer"]
+        direction TB
+        CM["CodeMirror 6 Editor<br/>(Markdown & Dictation Anchor)"]
         SP["Spacing & Punctuation Rules<br/>(formatDictationText)"]
-        SUP["SidecarSupervisor<br/>(Process Manager, Health Checks)"]
+        SUP["SidecarSupervisor<br/>(Process Manager & Health Checks)"]
+        CM <--> SP
+        SP <--> SUP
     end
 
     subgraph IPC ["Loopback IPC (127.0.0.1)"]
-        WS["WebSocket (Dynamic Port)<br/>HMAC Token Auth | Ping/Pong"]
+        direction TB
+        WS["WebSocket (Dynamic Port)<br/>HMAC Token Auth & Ping/Pong"]
     end
 
-    subgraph Sidecar ["Python Speech Engine (sidecar/)"]
+    subgraph Engine ["Python Speech Engine (sidecar/)"]
+        direction TB
         REC["AudioRecorder (sounddevice)<br/>16kHz Mono Float32 | Live WAV Writer"]
-        CHUNK["AudioChunker (Silero VAD ONNX)<br/>8s Target | Progressive Pauses | Quietest Frame Cut"]
-        TRANS["Transcriber Worker (faster-whisper)<br/>small.en int8 CPU | Context Prompting | FIFO Queue"]
+        CHUNK["AudioChunker (Silero VAD ONNX)<br/>8s Target | Progressive Pauses | Cut Remainder"]
+        TRANS["Transcriber Worker (faster-whisper)<br/>small.en int8 CPU | FIFO Queue & Echo Guard"]
+        REC -->|Audio Stream| CHUNK
+        CHUNK -->|Enqueued Chunks| TRANS
     end
 
-    subgraph Storage ["Session Folder (~/Documents/VoiceBrainstormPad/sessions/...)"]
-        WAV["audio.wav (Complete recording)"]
+    subgraph Storage ["Session Storage (~/Documents/VoiceBrainstormPad/sessions/...)"]
+        direction TB
+        WAV["audio.wav<br/>(Complete recording, patched header)"]
         CHUNKS["chunks/chunk_0001.wav ..."]
-        AUDIT["chunks.jsonl (Append-only chunk log)"]
-        TXLOG["transcripts.jsonl (Append-only metrics)"]
-        NOTE["note.md (Markdown document)"]
+        LOGS["chunks.jsonl & transcripts.jsonl<br/>(Append-only audit & metrics)"]
+        NOTE["note.md<br/>(Autosaved document text)"]
     end
 
-    CM <--> SP
-    SP <--> SUP
-    SUP <==>|JSON Messages| WS
-    WS <==> Sidecar
-    REC --> WAV
-    REC --> CHUNK
-    CHUNK --> CHUNKS
-    CHUNK --> AUDIT
-    CHUNK --> TRANS
-    TRANS --> TXLOG
-    TRANS ==>|transcript event| WS
+    SUP <==>|JSON Commands & Events| WS
+    WS <==>|Dictation Protocol| Engine
+    TRANS -.->|transcript & chunk_failed| WS
+    REC -->|Stream PCM16| WAV
+    CHUNK -->|Slice Chunk Files| CHUNKS
+    CHUNK -->|Chunk Metadata| LOGS
+    TRANS -->|Diagnostics & Text| LOGS
+    CM -->|Autosave <= 1s| NOTE
 ```
 
 ---
 
-## 🚀 Iteration Progress (Iteration 1 to 5)
+## Iteration Progress (Iteration 1 to 5)
 
 ### **Iteration 1: Foundation & Session Management**
 - Electron + TypeScript application shell with single-instance lock.
@@ -109,7 +113,7 @@ flowchart TD
 
 ---
 
-## ❓ Frequently Asked Questions
+## Frequently Asked Questions
 
 ### Q1: If I speak for 30 to 40 minutes straight on CPU (or GPU), will it keep running or crash?
 **It will keep running safely.** Here is why:
@@ -138,7 +142,7 @@ To achieve **instant real-time typing**, the speech industry uses two complement
 
 ---
 
-## 🛠️ Setup & Running Locally
+## Setup & Running Locally
 
 ### Prerequisites
 - **Node.js** 18+ and **npm**
@@ -176,13 +180,13 @@ To achieve **instant real-time typing**, the speech industry uses two complement
 
 ---
 
-## 🧪 Running Tests
+## Running Tests
 
 ### TypeScript / Electron Tests (Vitest)
 ```bash
 npx vitest run
 ```
-*Runs all 41 test cases across session storage, supervisor IPC, anchor movements, and spacing rules.*
+*Runs all 49 test cases across session storage, supervisor IPC, anchor movements, and spacing rules.*
 
 ### Python Sidecar Tests (Pytest)
 ```bash
@@ -191,9 +195,10 @@ npx vitest run
 .\.venv\Scripts\python -m pytest tests/test_sidecar.py -v
 .\.venv\Scripts\python -m pytest tests/test_transcriber.py -v
 ```
-*Runs 21 test cases across VAD chunking, WAV header patching, loopback security, and append-only transcript logging.*
+*Runs all 26 test cases across VAD chunking, WAV header patching, loopback security, and append-only transcript logging.*
 
 ---
 
-## 📜 License
+## License
 MIT License. Free for local, personal, and commercial brainstorming.
+
