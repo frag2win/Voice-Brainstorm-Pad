@@ -21,7 +21,7 @@ import queue
 import re
 import threading
 import time
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 
@@ -68,6 +68,37 @@ def clean_transcript(text: str) -> str:
     return cleaned
 
 
+def strip_prompt_echo(text: str, prompt: str) -> str:
+    """If output text starts with or equals the tail of the prompt, strip the repeated part."""
+    if not text or not prompt:
+        return text
+
+    p_words = prompt.strip().split()
+    t_words = text.strip().split()
+    if not p_words or not t_words:
+        return text
+
+    def normalize_word(w: str) -> str:
+        return re.sub(r"[^\w]", "", w).lower()
+
+    norm_p = [normalize_word(w) for w in p_words]
+    norm_t = [normalize_word(w) for w in t_words]
+
+    # Look for longest matching tail of prompt at the start of text
+    max_k = min(len(norm_p), len(norm_t))
+    best_match_k = 0
+    for k in range(max_k, 0, -1):
+        if norm_p[-k:] == norm_t[:k]:
+            best_match_k = k
+            break
+
+    if best_match_k > 0:
+        remaining_words = t_words[best_match_k:]
+        return " ".join(remaining_words).strip()
+
+    return text
+
+
 @dataclass
 class TranscriberConfig:
     model_name: str = "small.en"
@@ -96,6 +127,8 @@ class TranscriptionResult:
     latency_ms: float
     queue_depth: int
     audio_file: str
+    t_start: float = 0.0
+    t_end: float = 0.0
 
 
 class Transcriber:
@@ -103,19 +136,23 @@ class Transcriber:
         self,
         config: Optional[TranscriberConfig] = None,
         on_transcript: Optional[Callable[[TranscriptionResult], None]] = None,
+        on_chunk_failed: Optional[Callable[[dict], None]] = None,
         auto_warmup: bool = True,
+        model: Optional[Any] = None,
     ):
         self.config = config or TranscriberConfig()
         self.on_transcript = on_transcript
-        self.model: Optional[WhisperModel] = None
-        self.is_ready = False
+        self.on_chunk_failed = on_chunk_failed
+        self.model: Optional[WhisperModel] = model
+        self.is_ready = model is not None
         self._last_prompt_text = ""
 
         self._queue: queue.Queue = queue.Queue()
         self._stop_event = threading.Event()
         self._worker_thread: Optional[threading.Thread] = None
 
-        self._load_model(auto_warmup=auto_warmup)
+        if self.model is None:
+            self._load_model(auto_warmup=auto_warmup)
         self._start_worker()
 
     @property
@@ -124,6 +161,10 @@ class Transcriber:
 
     def has_pending(self) -> bool:
         return self._queue.unfinished_tasks > 0
+
+    def reset_context(self) -> None:
+        """Reset prompt context when a new recording starts."""
+        self._last_prompt_text = ""
 
     def _load_model(self, auto_warmup: bool = True) -> None:
         """Load the faster-whisper model, attempting local offline cache first (G4, NFR-6)."""
@@ -145,8 +186,22 @@ class Transcriber:
                 num_workers=self.config.num_workers,
                 local_files_only=True,
             )
-        except Exception:
-            # Fallback to downloading if not present in local cache
+        except Exception as e:
+            err_msg = str(e).lower()
+            is_cache_miss = (
+                "not found in cache" in err_msg
+                or "local_files_only" in err_msg
+                or "entry not found" in err_msg
+                or "file not found" in err_msg
+                or isinstance(e, (FileNotFoundError, OSError))
+            )
+            if not is_cache_miss:
+                logger.error(f"Failed to load Whisper model from cache: {e}")
+                raise
+
+            logger.warning(
+                f"Whisper model '{self.config.model_name}' not found in local cache. Falling back to downloading model..."
+            )
             self.model = WhisperModel(
                 self.config.model_name,
                 device=self.config.device,
@@ -187,13 +242,23 @@ class Transcriber:
         self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker_thread.start()
 
-    def enqueue(self, seq: int, audio_path: str, duration_s: float, session_dir: str) -> None:
+    def enqueue(
+        self,
+        seq: int,
+        audio_path: str,
+        duration_s: float,
+        session_dir: str,
+        t_start: float = 0.0,
+        t_end: float = 0.0,
+    ) -> None:
         """Enqueue an audio chunk for transcription."""
         item = {
             "seq": seq,
             "audio_path": audio_path,
             "duration_s": duration_s,
             "session_dir": session_dir,
+            "t_start": t_start,
+            "t_end": t_end,
             "enqueued_at": time.time(),
         }
         self._queue.put(item)
@@ -220,6 +285,17 @@ class Transcriber:
         session_dir = item["session_dir"]
         queue_depth = self._queue.qsize()
 
+        # Collect per-chunk diagnostics at start of chunk
+        rss_mb = 0.0
+        avail_ram_mb = 0.0
+        try:
+            import psutil
+            proc = psutil.Process()
+            rss_mb = round(proc.memory_info().rss / (1024 * 1024), 2)
+            avail_ram_mb = round(psutil.virtual_memory().available / (1024 * 1024), 2)
+        except Exception as e:
+            logger.debug(f"Could not retrieve memory diagnostics: {e}")
+
         if not self.model or not os.path.exists(audio_path):
             return
 
@@ -229,59 +305,88 @@ class Transcriber:
         # TRD D3: Initial prompt from previous chunk for context continuity
         prompt = self._last_prompt_text if self._last_prompt_text else None
 
-        segments, _ = self.model.transcribe(
-            audio_path,
-            language=self.config.language,
-            beam_size=self.config.beam_size,
-            condition_on_previous_text=self.config.condition_on_previous_text,
-            temperature=self.config.temperature,
-            compression_ratio_threshold=self.config.compression_ratio_threshold,
-            log_prob_threshold=self.config.log_prob_threshold,
-            no_speech_threshold=self.config.no_speech_threshold,
-            initial_prompt=prompt,
-            vad_filter=False,  # VAD already handled by Silero in chunker
-        )
-
         texts = []
         try:
-            for s in segments:
-                # Keep segments unless confidence is overwhelmingly non-speech
-                if getattr(s, "no_speech_prob", 0.0) > 0.90 and getattr(s, "avg_logprob", 0.0) < -1.5:
-                    continue
-                txt = s.text.strip()
-                if txt:
-                    texts.append(txt)
-        except RuntimeError as e:
-            if "mkl_malloc" in str(e).lower() or "memory" in str(e).lower():
+            segments, info = self.model.transcribe(
+                audio_path,
+                language=self.config.language,
+                beam_size=self.config.beam_size,
+                condition_on_previous_text=self.config.condition_on_previous_text,
+                temperature=self.config.temperature,
+                compression_ratio_threshold=self.config.compression_ratio_threshold,
+                log_prob_threshold=self.config.log_prob_threshold,
+                no_speech_threshold=self.config.no_speech_threshold,
+                initial_prompt=prompt,
+                vad_filter=False,  # VAD already handled by Silero in chunker
+            )
+
+            # Check if temperature fallback happened
+            used_temp = getattr(info, "temperature", None)
+            initial_temp = (
+                self.config.temperature[0]
+                if isinstance(self.config.temperature, (tuple, list))
+                else self.config.temperature
+            )
+            if used_temp is not None and used_temp > initial_temp:
                 logger.warning(
-                    f"MKL memory pressure during chunk #{seq} ({e}), running garbage collection and retrying with greedy decoding..."
+                    f"Chunk #{seq}: temperature fallback occurred (used temperature {used_temp} > initial {initial_temp})"
                 )
-                import gc
-                gc.collect()
-                # Retry with greedy decoding (temperature=0.0) to avoid memory expansion
-                retry_segments, _ = self.model.transcribe(
-                    audio_path,
-                    language=self.config.language,
-                    beam_size=1,
-                    condition_on_previous_text=False,
-                    temperature=0.0,
-                    vad_filter=False,
-                )
-                texts = []
-                for s in retry_segments:
+
+            try:
+                for s in segments:
+                    seg_temp = getattr(s, "temperature", None)
+                    if seg_temp is not None and seg_temp > initial_temp and used_temp == initial_temp:
+                        logger.warning(
+                            f"Chunk #{seq}: segment temperature fallback occurred (temperature {seg_temp} > initial {initial_temp})"
+                        )
+                    # Keep segments unless confidence is overwhelmingly non-speech
+                    if getattr(s, "no_speech_prob", 0.0) > 0.90 and getattr(s, "avg_logprob", 0.0) < -1.5:
+                        continue
                     txt = s.text.strip()
                     if txt:
                         texts.append(txt)
-            else:
-                raise
+            except RuntimeError as e:
+                if "mkl_malloc" in str(e).lower() or "memory" in str(e).lower():
+                    logger.warning(
+                        f"MKL memory pressure during chunk #{seq} ({e}), running garbage collection and retrying with greedy decoding..."
+                    )
+                    import gc
+                    gc.collect()
+                    # Protect the second pass with its own try/except
+                    try:
+                        retry_segments, _ = self.model.transcribe(
+                            audio_path,
+                            language=self.config.language,
+                            beam_size=1,
+                            condition_on_previous_text=False,
+                            temperature=0.0,
+                            vad_filter=False,
+                        )
+                        texts = []
+                        for s in retry_segments:
+                            txt = s.text.strip()
+                            if txt:
+                                texts.append(txt)
+                    except Exception as retry_err:
+                        self._handle_chunk_failure(session_dir, seq, audio_path, str(retry_err), rss_mb, avail_ram_mb)
+                        return
+                else:
+                    self._handle_chunk_failure(session_dir, seq, audio_path, str(e), rss_mb, avail_ram_mb)
+                    return
+        except Exception as main_err:
+            self._handle_chunk_failure(session_dir, seq, audio_path, str(main_err), rss_mb, avail_ram_mb)
+            return
 
         raw_text = " ".join(texts)
         clean_text = clean_transcript(raw_text)
 
+        # Apply prompt echo guard
+        if clean_text and prompt:
+            clean_text = strip_prompt_echo(clean_text, prompt)
+
         transcribe_s = time.time() - t0
         rtf = transcribe_s / max(0.01, duration_s)
         word_count = len(clean_text.split()) if clean_text else 0
-        # End-to-end latency from speech start: chunk duration + queue wait + transcribe time
         latency_ms = (duration_s * 1000.0) + ((time.time() - item["enqueued_at"]) * 1000.0)
 
         if clean_text:
@@ -289,7 +394,6 @@ class Transcriber:
             words = clean_text.split()
             self._last_prompt_text = " ".join(words[-25:])
 
-        # Log metrics to terminal (Iteration 4 core requirement, NFR-2)
         logger.info(
             f"[Transcriber] chunk #{seq} ({duration_s:.1f}s, RTF {rtf:.2f}x, {word_count} words, {latency_ms:.0f}ms end-to-end latency) -> \"{clean_text}\""
         )
@@ -305,10 +409,12 @@ class Transcriber:
             latency_ms=latency_ms,
             queue_depth=queue_depth,
             audio_file=audio_path,
+            t_start=item.get("t_start", 0.0),
+            t_end=item.get("t_end", 0.0),
         )
 
-        # Append to append-only transcripts.jsonl (Defect 1 fix)
-        self._append_transcript(session_dir, res)
+        # Append to append-only transcripts.jsonl with memory diagnostics
+        self._append_transcript(session_dir, res, rss_mb=rss_mb, avail_ram_mb=avail_ram_mb)
 
         if self.on_transcript:
             try:
@@ -316,8 +422,55 @@ class Transcriber:
             except Exception as e:
                 logger.error(f"Error in on_transcript callback: {e}")
 
-    def _append_transcript(self, session_dir: str, res: TranscriptionResult) -> None:
-        """Append transcription result to append-only transcripts.jsonl (Defect 1 fix)."""
+    def _handle_chunk_failure(
+        self,
+        session_dir: str,
+        seq: int,
+        audio_file: str,
+        error_msg: str,
+        rss_mb: float,
+        avail_ram_mb: float,
+    ) -> None:
+        """Append failure record to transcripts.jsonl and notify chunk_failed callback."""
+        logger.error(f"Chunk #{seq} failed transcription: {error_msg}")
+
+        if session_dir and os.path.exists(session_dir):
+            transcripts_path = os.path.join(session_dir, "transcripts.jsonl")
+            entry = {
+                "seq": seq,
+                "failed": True,
+                "error": error_msg,
+                "audio_file": audio_file,
+                "rss_mb": rss_mb,
+                "avail_ram_mb": avail_ram_mb,
+                "timestamp": time.time(),
+            }
+            try:
+                with open(transcripts_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(entry) + "\n")
+                    f.flush()
+            except Exception as e:
+                logger.error(f"Could not append failure record to transcripts.jsonl: {e}")
+
+        if self.on_chunk_failed:
+            try:
+                self.on_chunk_failed({
+                    "type": "chunk_failed",
+                    "seq": seq,
+                    "audio_file": audio_file,
+                    "error": error_msg,
+                })
+            except Exception as e:
+                logger.error(f"Error in on_chunk_failed callback: {e}")
+
+    def _append_transcript(
+        self,
+        session_dir: str,
+        res: TranscriptionResult,
+        rss_mb: float = 0.0,
+        avail_ram_mb: float = 0.0,
+    ) -> None:
+        """Append transcription result to append-only transcripts.jsonl."""
         if not session_dir or not os.path.exists(session_dir):
             return
 
@@ -331,6 +484,10 @@ class Transcriber:
             "rtf": round(res.rtf, 3),
             "queue_wait_ms": round(res.queue_wait_ms, 1),
             "latency_ms": round(res.latency_ms, 1),
+            "t_start": round(res.t_start, 3),
+            "t_end": round(res.t_end, 3),
+            "rss_mb": rss_mb,
+            "avail_ram_mb": avail_ram_mb,
             "model": self.config.model_name,
             "audio_file": res.audio_file,
             "timestamp": time.time(),

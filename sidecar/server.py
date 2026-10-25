@@ -146,10 +146,39 @@ class SidecarServer:
                         "latency_ms": round(result.latency_ms, 1),
                         "queue_depth": result.queue_depth,
                         "audio_file": result.audio_file,
+                        "t_start": getattr(result, "t_start", 0.0),
+                        "t_end": getattr(result, "t_end", 0.0),
                     })
                     asyncio.run_coroutine_threadsafe(ws.send(msg), loop)
                 except Exception as e:
                     logger.error(f"Error sending transcript message: {e}")
+
+    def _on_chunk_failed(self, data: dict) -> None:
+        """Called by Transcriber worker thread when transcription of a chunk fails."""
+        logger.warning(
+            f"[Transcriber] chunk #{data.get('seq')} failed transcription: {data.get('error')}"
+        )
+        ws = self._active_ws
+        loop = self._loop
+        if ws and loop:
+            is_open = True
+            if hasattr(ws, "state"):
+                is_open = (ws.state == State.OPEN) if State else (getattr(ws.state, "name", "") == "OPEN")
+            elif hasattr(ws, "closed"):
+                is_open = not ws.closed
+
+            if is_open:
+                try:
+                    msg = json.dumps({
+                        "type": "chunk_failed",
+                        "version": PROTOCOL_VERSION,
+                        "seq": data["seq"],
+                        "audio_file": data["audio_file"],
+                        "error": data["error"],
+                    })
+                    asyncio.run_coroutine_threadsafe(ws.send(msg), loop)
+                except Exception as e:
+                    logger.error(f"Error sending chunk_failed message: {e}")
 
     async def start(self) -> None:
         """Start the WebSocket server on 127.0.0.1 and record the assigned port."""
@@ -176,6 +205,7 @@ class SidecarServer:
                 self.transcriber = Transcriber(
                     config=TranscriberConfig(model_name="small.en", cpu_threads=4),
                     on_transcript=self._on_transcript,
+                    on_chunk_failed=self._on_chunk_failed,
                     auto_warmup=True,
                 )
                 self.state = "idle"
@@ -185,6 +215,7 @@ class SidecarServer:
                     self.transcriber = Transcriber(
                         config=TranscriberConfig(model_name="base.en", cpu_threads=4),
                         on_transcript=self._on_transcript,
+                        on_chunk_failed=self._on_chunk_failed,
                         auto_warmup=True,
                     )
                     self.state = "idle"
@@ -379,6 +410,9 @@ class SidecarServer:
 
                     if self.recorder:
                         self.recorder.stop()
+
+                    if self.transcriber:
+                        self.transcriber.reset_context()
 
                     self.recorder = AudioRecorder(
                         on_level=handle_level,
