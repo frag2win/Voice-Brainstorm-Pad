@@ -49,6 +49,7 @@ export interface SupervisorOptions {
   pythonPath?: string;
   sidecarScript?: string;
   pingIntervalMs?: number;
+  pingTimeoutMs?: number;
   maxRestartDelayMs?: number;
 }
 
@@ -64,9 +65,11 @@ export class SidecarSupervisor extends EventEmitter {
   private restartTimer: NodeJS.Timeout | null = null;
   private pingTimer: NodeJS.Timeout | null = null;
   private pingTimeoutTimer: NodeJS.Timeout | null = null;
+  private missedPongs: number = 0;
   private restartDelayMs: number = 1000;
   private readonly maxRestartDelayMs: number;
   private readonly pingIntervalMs: number;
+  private readonly pingTimeoutMs: number;
   private devices: AudioDevice[] = [];
   private model: string = "small.en";
 
@@ -78,6 +81,7 @@ export class SidecarSupervisor extends EventEmitter {
       options.sidecarScript ??
       path.resolve(__dirname, "../../sidecar/server.py");
     this.pingIntervalMs = options.pingIntervalMs ?? 5000;
+    this.pingTimeoutMs = options.pingTimeoutMs ?? 3000;
     this.maxRestartDelayMs = options.maxRestartDelayMs ?? 10000;
 
     if (options.autoStart) {
@@ -336,6 +340,7 @@ export class SidecarSupervisor extends EventEmitter {
         break;
 
       case "pong":
+        this.missedPongs = 0;
         if (this.pingTimeoutTimer) {
           clearTimeout(this.pingTimeoutTimer);
           this.pingTimeoutTimer = null;
@@ -383,22 +388,33 @@ export class SidecarSupervisor extends EventEmitter {
 
   // ── Ping Health Check ───────────────────────────────────────────────────────
 
+  public getMissedPongs(): number {
+    return this.missedPongs;
+  }
+
   private startPing(): void {
     this.stopPing();
+    this.missedPongs = 0;
     this.pingTimer = setInterval(() => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.ws.send(JSON.stringify({ type: "ping", version: 1, id: Date.now() }));
-        // Expect pong within 3s
+        if (this.pingTimeoutTimer) {
+          clearTimeout(this.pingTimeoutTimer);
+        }
+        // Expect pong within pingTimeoutMs
         this.pingTimeoutTimer = setTimeout(() => {
-          // Pong timed out — connection may be hung
-          if (this.ws) {
-            try {
-              this.ws.close();
-            } catch {
-              // ignore
+          this.missedPongs++;
+          if (this.missedPongs >= 3) {
+            // 3 consecutive missed pongs — connection presumed dead
+            if (this.ws) {
+              try {
+                this.ws.close();
+              } catch {
+                // ignore
+              }
             }
           }
-        }, 3000);
+        }, this.pingTimeoutMs);
       }
     }, this.pingIntervalMs);
   }
