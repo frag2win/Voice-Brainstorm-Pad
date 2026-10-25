@@ -38,8 +38,8 @@ function createWindow(): void {
     minWidth: 600,
     minHeight: 400,
     title: "Voice Brainstorm Pad",
-    backgroundColor: "#1a1a2e",
-    show: false,
+    backgroundColor: "#09090b",
+    show: true,
     webPreferences: {
       preload: PRELOAD,
       contextIsolation: true,
@@ -52,7 +52,10 @@ function createWindow(): void {
   // Load the renderer HTML directly from disk (no dev-server needed)
   win.loadFile(INDEX_HTML);
 
-  win.once("ready-to-show", () => win?.show());
+  win.once("ready-to-show", () => {
+    win?.show();
+    win?.focus();
+  });
 
   win.on("closed", () => {
     win = null;
