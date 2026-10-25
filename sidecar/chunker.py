@@ -36,6 +36,7 @@ class ChunkerConfig:
     max_chunk_s: float = 15.0       # Progressive cut limit (reduced from 20s to meet 10s latency target)
     min_silence_s: float = 0.3      # 300ms pause target
     pause_cut_s: float = 2.5        # Long pause cut threshold (matches paragraph break threshold)
+    edge_pad_s: float = 0.2         # Silence padding around speech boundaries at chunk edges
     speech_padding_s: float = 0.2
     vad_threshold: float = 0.5
     energy_threshold: float = 0.003  # Preserves quiet speech from laptop microphones
@@ -132,17 +133,30 @@ class AudioChunker:
             self._silence_samples = 0
         else:
             self._silence_samples += len(frame)
+            if not self._has_speech:
+                pad_frames = int(round(self.config.edge_pad_s * self.config.sample_rate / self.config.frame_size))
+                if len(self._buffer) > pad_frames:
+                    excess = len(self._buffer) - pad_frames
+                    for _ in range(excess):
+                        dropped = self._buffer.pop(0)
+                        self._buffer_is_speech.pop(0)
+                        self._total_samples_emitted += len(dropped)
+                        self._current_chunk_samples -= len(dropped)
+                    self._silence_samples = len(self._buffer) * self.config.frame_size
 
         cur_duration = self._current_chunk_samples / self.config.sample_rate
         silence_duration = self._silence_samples / self.config.sample_rate
 
         # ── Cut Decision Rules ──
         # Long-pause rule: if trailing silence >= pause_cut_s (default 2.5s) and speech >= 1.0s, cut immediately
-        if silence_duration >= self.config.pause_cut_s:
+        pause_cut_frames = int(round(self.config.pause_cut_s * self.config.sample_rate / self.config.frame_size))
+        current_silence_frames = self._silence_samples // self.config.frame_size
+
+        if current_silence_frames >= pause_cut_frames:
             speech_frames = sum(1 for flag in self._buffer_is_speech if flag)
             speech_s = speech_frames * self.config.frame_size / self.config.sample_rate
             if speech_s >= 1.0:
-                return self._emit_chunk()
+                return self._emit_pause_cut()
             else:
                 # Discard as noise: clear buffer and advance timeline
                 self._total_samples_emitted += self._current_chunk_samples
@@ -155,11 +169,11 @@ class AudioChunker:
 
         # Progressive pauses: shorter pauses are accepted as chunk grows longer
         if cur_duration >= 12.0 and silence_duration >= 0.08:
-            return self._emit_chunk()
+            return self._emit_progressive_cut()
         elif cur_duration >= 10.0 and silence_duration >= 0.15:
-            return self._emit_chunk()
+            return self._emit_progressive_cut()
         elif cur_duration >= self.config.target_chunk_s and silence_duration >= self.config.min_silence_s:
-            return self._emit_chunk()
+            return self._emit_progressive_cut()
 
         # Hard limit reached (~15s continuous speech): force cut at quietest frame in last 3s
         elif cur_duration >= self.config.max_chunk_s:
@@ -168,15 +182,137 @@ class AudioChunker:
         return None
 
     def flush(self) -> Optional[AudioChunk]:
-        """Flush remaining buffered audio on stop."""
-        if self._current_chunk_samples > 0:
-            return self._emit_chunk()
-        return None
+        """Flush remaining buffered audio on stop, trimming leading/trailing silence beyond edge_pad_s."""
+        if not self._buffer:
+            return None
+
+        speech_indices = [i for i, f in enumerate(self._buffer_is_speech) if f]
+        if not speech_indices:
+            # Pure silence / non-speech: advance timeline and clear
+            self._total_samples_emitted += sum(len(f) for f in self._buffer)
+            self._buffer = []
+            self._buffer_is_speech = []
+            self._current_chunk_samples = 0
+            self._silence_samples = 0
+            self._has_speech = False
+            return None
+
+        first_speech_idx = speech_indices[0]
+        last_speech_idx = speech_indices[-1]
+        pad_frames = int(round(self.config.edge_pad_s * self.config.sample_rate / self.config.frame_size))
+
+        start_idx = max(0, first_speech_idx - pad_frames)
+        end_idx = min(len(self._buffer), last_speech_idx + 1 + pad_frames)
+
+        if start_idx > 0:
+            dropped_leading = self._buffer[:start_idx]
+            self._total_samples_emitted += sum(len(f) for f in dropped_leading)
+
+        chunk_frames = self._buffer[start_idx:end_idx]
+        chunk_flags = self._buffer_is_speech[start_idx:end_idx]
+
+        trailing_dropped = self._buffer[end_idx:]
+        trailing_dropped_samples = sum(len(f) for f in trailing_dropped)
+
+        self._buffer = []
+        self._buffer_is_speech = []
+        self._current_chunk_samples = 0
+        self._silence_samples = 0
+        self._has_speech = False
+
+        return self._emit_frames(
+            chunk_frames=chunk_frames,
+            remainder_frames=[],
+            chunk_flags=chunk_flags,
+            remainder_flags=[],
+            dropped_samples_after=trailing_dropped_samples,
+        )
+
+    def _emit_pause_cut(self) -> Optional[AudioChunk]:
+        """Emit chunk cut at long pause, trimming leading silence and trailing silence beyond edge_pad_s."""
+        if not self._buffer:
+            return None
+
+        pad_frames = int(round(self.config.edge_pad_s * self.config.sample_rate / self.config.frame_size))
+        speech_indices = [i for i, f in enumerate(self._buffer_is_speech) if f]
+        if not speech_indices:
+            self._total_samples_emitted += sum(len(f) for f in self._buffer)
+            self._buffer = []
+            self._buffer_is_speech = []
+            self._current_chunk_samples = 0
+            self._silence_samples = 0
+            self._has_speech = False
+            return None
+
+        first_speech_idx = speech_indices[0]
+        last_speech_idx = speech_indices[-1]
+
+        start_idx = max(0, first_speech_idx - pad_frames)
+        end_idx = min(len(self._buffer), last_speech_idx + 1 + pad_frames)
+
+        if start_idx > 0:
+            dropped_leading = self._buffer[:start_idx]
+            self._total_samples_emitted += sum(len(f) for f in dropped_leading)
+
+        chunk_frames = self._buffer[start_idx:end_idx]
+        chunk_flags = self._buffer_is_speech[start_idx:end_idx]
+
+        raw_remainder = self._buffer[end_idx:]
+        if len(raw_remainder) > pad_frames:
+            dropped_remainder = raw_remainder[:-pad_frames]
+            remainder_frames = raw_remainder[-pad_frames:]
+            dropped_samples = sum(len(f) for f in dropped_remainder)
+        else:
+            remainder_frames = raw_remainder
+            dropped_samples = 0
+
+        remainder_flags = [False] * len(remainder_frames)
+
+        return self._emit_frames(
+            chunk_frames=chunk_frames,
+            remainder_frames=remainder_frames,
+            chunk_flags=chunk_flags,
+            remainder_flags=remainder_flags,
+            dropped_samples_after=dropped_samples,
+        )
+
+    def _emit_progressive_cut(self) -> Optional[AudioChunk]:
+        """Emit chunk at progressive pause cut, trimming leading silence."""
+        if not self._buffer:
+            return None
+
+        pad_frames = int(round(self.config.edge_pad_s * self.config.sample_rate / self.config.frame_size))
+        speech_indices = [i for i, f in enumerate(self._buffer_is_speech) if f]
+        if speech_indices:
+            first_speech_idx = speech_indices[0]
+            start_idx = max(0, first_speech_idx - pad_frames)
+            if start_idx > 0:
+                dropped_leading = self._buffer[:start_idx]
+                self._total_samples_emitted += sum(len(f) for f in dropped_leading)
+                self._buffer = self._buffer[start_idx:]
+                self._buffer_is_speech = self._buffer_is_speech[start_idx:]
+
+        frames = self._buffer
+        flags = self._buffer_is_speech
+        self._buffer = []
+        self._buffer_is_speech = []
+        return self._emit_frames(frames, remainder_frames=[], chunk_flags=flags, remainder_flags=[], dropped_samples_after=0)
 
     def _emit_forced_cut(self, search_window_s: float = 3.0) -> Optional[AudioChunk]:
         """Find the quietest frame in the search window, split buffer, and carry remainder forward."""
         if not self._buffer:
             return None
+
+        pad_frames = int(round(self.config.edge_pad_s * self.config.sample_rate / self.config.frame_size))
+        speech_indices = [i for i, f in enumerate(self._buffer_is_speech) if f]
+        if speech_indices:
+            first_speech_idx = speech_indices[0]
+            start_idx = max(0, first_speech_idx - pad_frames)
+            if start_idx > 0:
+                dropped_leading = self._buffer[:start_idx]
+                self._total_samples_emitted += sum(len(f) for f in dropped_leading)
+                self._buffer = self._buffer[start_idx:]
+                self._buffer_is_speech = self._buffer_is_speech[start_idx:]
 
         frames_in_search = int(search_window_s * self.config.sample_rate / self.config.frame_size)
         window_size = min(len(self._buffer), max(1, frames_in_search))
@@ -191,15 +327,11 @@ class AudioChunker:
         remainder_frames = self._buffer[cut_point:]
         remainder_flags = self._buffer_is_speech[cut_point:]
 
-        return self._emit_frames(chunk_frames, remainder_frames, chunk_flags, remainder_flags)
+        return self._emit_frames(chunk_frames, remainder_frames, chunk_flags, remainder_flags, dropped_samples_after=0)
 
     def _emit_chunk(self) -> Optional[AudioChunk]:
         """Finalize and save all currently buffered audio as a chunk."""
-        frames = self._buffer
-        flags = self._buffer_is_speech
-        self._buffer = []
-        self._buffer_is_speech = []
-        return self._emit_frames(frames, remainder_frames=[], chunk_flags=flags, remainder_flags=[])
+        return self._emit_progressive_cut()
 
     def _emit_frames(
         self,
@@ -207,10 +339,12 @@ class AudioChunker:
         remainder_frames: List[np.ndarray],
         chunk_flags: List[bool],
         remainder_flags: List[bool],
+        dropped_samples_after: int = 0,
     ) -> Optional[AudioChunk]:
         if not chunk_frames:
             self._buffer = remainder_frames
             self._buffer_is_speech = remainder_flags
+            self._total_samples_emitted += dropped_samples_after
             return None
 
         samples = np.concatenate(chunk_frames)
@@ -238,7 +372,7 @@ class AudioChunker:
 
         # Discard pure non-speech chunks (TRD 2.3)
         if not chunk_has_speech:
-            self._total_samples_emitted += len(samples)
+            self._total_samples_emitted += len(samples) + dropped_samples_after
             return None
         self.sequence_num += 1
         seq = self.sequence_num
@@ -264,7 +398,7 @@ class AudioChunker:
             f.write(json.dumps(audit_entry) + "\n")
             f.flush()
 
-        self._total_samples_emitted += len(samples)
+        self._total_samples_emitted += len(samples) + dropped_samples_after
 
         return AudioChunk(
             seq=seq,
